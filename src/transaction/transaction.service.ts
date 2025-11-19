@@ -188,6 +188,7 @@ export class TransactionService {
 
   /**
    * Extract transfer details from parsed transaction
+   * Returns all transfers in the transaction (for multi-transfer support)
    */
   private extractTransferDetails(transaction: ParsedTransactionWithMeta): {
     from: string;
@@ -198,6 +199,7 @@ export class TransactionService {
       // Look for system program transfer instruction
       const instructions = transaction.transaction.message.instructions;
 
+      // Find first transfer (for backward compatibility)
       for (const instruction of instructions) {
         if ('parsed' in instruction && instruction.program === 'system') {
           const parsed = instruction.parsed;
@@ -216,6 +218,125 @@ export class TransactionService {
     } catch (error) {
       this.logger.error(`Failed to extract transfer details: ${error.message}`);
       return null;
+    }
+  }
+
+  /**
+   * Extract all transfer details from parsed transaction
+   * Returns array of all transfers (for multi-transfer verification)
+   */
+  private extractAllTransferDetails(transaction: ParsedTransactionWithMeta): Array<{
+    from: string;
+    to: string;
+    amount: number;
+  }> {
+    try {
+      const instructions = transaction.transaction.message.instructions;
+      const transfers: Array<{ from: string; to: string; amount: number }> = [];
+
+      for (const instruction of instructions) {
+        if ('parsed' in instruction && instruction.program === 'system') {
+          const parsed = instruction.parsed;
+          
+          if (parsed.type === 'transfer') {
+            transfers.push({
+              from: parsed.info.source,
+              to: parsed.info.destination,
+              amount: parsed.info.lamports,
+            });
+          }
+        }
+      }
+
+      return transfers;
+    } catch (error) {
+      this.logger.error(`Failed to extract all transfer details: ${error.message}`);
+      return [];
+    }
+  }
+
+  /**
+   * Verify multiple transfers in a single transaction
+   * Used when developer pays fees to multiple pools (RewardPool + PlatformPool)
+   */
+  async verifyMultipleTransfers(
+    signature: string,
+    expectedFrom: string,
+    expectedTransfers: Array<{ to: string; amount: number }>,
+    network?: 'devnet' | 'mainnet',
+  ): Promise<TransactionVerification> {
+    this.ensureInitialized();
+    
+    const targetNetwork = network || this.configService.getEnvironment();
+    const connection = targetNetwork === 'devnet' ? this.devnetConnection : this.mainnetConnection;
+
+    try {
+      this.logger.log(`Verifying multiple transfers in transaction: ${signature}`);
+      this.logger.log(`  Network: ${targetNetwork}`);
+      this.logger.log(`  Expected from: ${expectedFrom}`);
+      this.logger.log(`  Expected transfers: ${expectedTransfers.length}`);
+
+      const transaction = await this.fetchTransactionWithRetry(connection, signature);
+
+      if (!transaction) {
+        return {
+          isValid: false,
+          error: 'Transaction not found',
+        };
+      }
+
+      if (transaction.meta?.err) {
+        return {
+          isValid: false,
+          error: `Transaction failed: ${JSON.stringify(transaction.meta.err)}`,
+        };
+      }
+
+      const transfers = this.extractAllTransferDetails(transaction);
+
+      if (transfers.length < expectedTransfers.length) {
+        return {
+          isValid: false,
+          error: `Expected ${expectedTransfers.length} transfers, found ${transfers.length}`,
+        };
+      }
+
+      // Verify each expected transfer
+      for (const expected of expectedTransfers) {
+        const found = transfers.find(
+          t => t.from === expectedFrom && t.to === expected.to
+        );
+
+        if (!found) {
+          return {
+            isValid: false,
+            error: `Transfer to ${expected.to} not found`,
+          };
+        }
+
+        const amountDifference = Math.abs(found.amount - expected.amount);
+        const tolerance = 0.001 * LAMPORTS_PER_SOL;
+
+        if (amountDifference > tolerance) {
+          return {
+            isValid: false,
+            error: `Amount mismatch for ${expected.to}. Expected: ${expected.amount}, Got: ${found.amount}`,
+          };
+        }
+      }
+
+      this.logger.log('✅ All transfers verified successfully');
+      return {
+        isValid: true,
+        fromAddress: expectedFrom,
+        amount: expectedTransfers.reduce((sum, t) => sum + t.amount, 0),
+      };
+    } catch (error) {
+      this.logger.error(`Multiple transfer verification failed: ${error.message}`);
+      return {
+        isValid: false,
+        error: `Verification error: ${error.message}`,
+      };
     }
   }
 

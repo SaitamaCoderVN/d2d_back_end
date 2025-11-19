@@ -470,9 +470,10 @@ export type D2dProgramSol = {
           "writable": true
         },
         {
-          "name": "adminPool",
+          "name": "treasuryPda",
           "docs": [
-            "Note: ADMIN_POOL_SEED maps to platform_pool for backward compatibility"
+            "Note: Recovered funds go back to TreasuryPool, not PlatformPool",
+            "PlatformPool only receives 0.1% developer fees"
           ],
           "writable": true,
           "pda": {
@@ -480,14 +481,14 @@ export type D2dProgramSol = {
               {
                 "kind": "const",
                 "value": [
-                  112,
-                  108,
-                  97,
                   116,
-                  102,
-                  111,
                   114,
-                  109,
+                  101,
+                  97,
+                  115,
+                  117,
+                  114,
+                  121,
                   95,
                   112,
                   111,
@@ -631,9 +632,10 @@ export type D2dProgramSol = {
           "writable": true
         },
         {
-          "name": "adminPool",
+          "name": "treasuryPda",
           "docs": [
-            "Note: ADMIN_POOL_SEED maps to platform_pool for backward compatibility"
+            "Note: Recovered funds go back to TreasuryPool, not PlatformPool",
+            "PlatformPool only receives 0.1% developer fees"
           ],
           "writable": true,
           "pda": {
@@ -641,14 +643,14 @@ export type D2dProgramSol = {
               {
                 "kind": "const",
                 "value": [
-                  112,
-                  108,
-                  97,
                   116,
-                  102,
-                  111,
                   114,
-                  109,
+                  101,
+                  97,
+                  115,
+                  117,
+                  114,
+                  121,
                   95,
                   112,
                   111,
@@ -766,6 +768,32 @@ export type D2dProgramSol = {
                   97,
                   114,
                   100,
+                  95,
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "platformPool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  116,
+                  102,
+                  111,
+                  114,
+                  109,
                   95,
                   112,
                   111,

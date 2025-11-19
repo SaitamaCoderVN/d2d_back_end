@@ -261,13 +261,20 @@ export class DeploymentService {
     try {
       // Step 1: Verify payment transaction
       this.logger.log('Step 1: Verifying payment transaction...');
-      // Payment goes to Reward Pool PDA (receives developer fees)
+      // Payment is split: monthlyFee (1%) → RewardPool, platformFee (0.1%) → PlatformPool
       const [rewardPoolPDA] = this.programService.getRewardPoolPDA();
+      const [platformPoolPDA] = this.programService.getPlatformPoolPDA();
       const rewardPoolAddress = rewardPoolPDA.toString();
-      const totalPayment =
-        dto.serviceFee +
-        dto.deploymentPlatformFee +
-        dto.monthlyFee * dto.initialMonths;
+      const platformPoolAddress = platformPoolPDA.toString();
+      
+      // Calculate fee breakdown:
+      // - monthlyFee (1% monthly) → RewardPool
+      // - deploymentPlatformFee (0.1% platform) → PlatformPool
+      // - serviceFee → RewardPool (part of reward fees)
+      const monthlyFeeAmount = dto.monthlyFee * dto.initialMonths;
+      const rewardPoolAmount = monthlyFeeAmount + dto.serviceFee; // Monthly fee + service fee → RewardPool
+      const platformPoolAmount = dto.deploymentPlatformFee; // Platform fee → PlatformPool
+      const totalPayment = rewardPoolAmount + platformPoolAmount;
 
       // Check if this is a simulated transaction (for testing)
       const isSimulated = dto.paymentSignature.startsWith('SIMULATED_');
@@ -281,28 +288,33 @@ export class DeploymentService {
         // Verify payment on current network (devnet or mainnet based on SOLANA_ENV)
         this.logger.log('   Payment signature:', dto.paymentSignature);
         this.logger.log('   Verifying on network...');
-        this.logger.log('   Expected recipient: Reward Pool PDA', rewardPoolAddress);
+        this.logger.log('   Expected transfers:');
+        this.logger.log(`     - Reward Pool: ${rewardPoolAmount} lamports (${rewardPoolAmount / 1e9} SOL)`);
+        this.logger.log(`     - Platform Pool: ${platformPoolAmount} lamports (${platformPoolAmount / 1e9} SOL)`);
 
-      const verification = await this.transactionService.verifyTransaction(
-        dto.paymentSignature,
-        dto.userWalletAddress,
-        rewardPoolAddress, // Payment goes to Reward Pool PDA (receives developer fees)
-        totalPayment,
-      );
+        // Verify multiple transfers in one transaction
+        const verification = await this.transactionService.verifyMultipleTransfers(
+          dto.paymentSignature,
+          dto.userWalletAddress,
+          [
+            { to: rewardPoolAddress, amount: rewardPoolAmount },
+            { to: platformPoolAddress, amount: platformPoolAmount },
+          ],
+        );
 
-      if (!verification.isValid) {
+        if (!verification.isValid) {
           this.logger.error('❌ Payment verification failed');
           this.logger.error('   Error:', verification.error);
           this.logger.error('   Expected from:', dto.userWalletAddress);
-          this.logger.error('   Expected to: Reward Pool PDA', rewardPoolAddress);
-          this.logger.error('   Expected amount:', totalPayment, 'lamports');
-        throw new BadRequestException(`Payment verification failed: ${verification.error}`);
-      }
+          this.logger.error('   Expected transfers:');
+          this.logger.error(`     - Reward Pool: ${rewardPoolAmount} lamports`);
+          this.logger.error(`     - Platform Pool: ${platformPoolAmount} lamports`);
+          throw new BadRequestException(`Payment verification failed: ${verification.error}`);
+        }
 
         this.logger.log('✅ Payment verified successfully');
         this.logger.log('   From:', verification.fromAddress);
-        this.logger.log('   To:', verification.toAddress);
-        this.logger.log('   Amount:', verification.amount, 'lamports');
+        this.logger.log('   Total amount:', verification.amount, 'lamports');
       }
 
       // Step 2: Create Supabase deployment record

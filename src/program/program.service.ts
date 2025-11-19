@@ -1246,8 +1246,7 @@ export class ProgramService implements OnModuleInit {
       this.logger.log(`  Deployed Program ID: ${deployedProgramId.toString()}`);
       this.logger.log(`  Ephemeral Key: ${ephemeralKey.toString()}`);
 
-      // Get Platform Pool and Reward Pool PDAs
-      const [platformPoolPDA] = this.getPlatformPoolPDA();
+      // Get Reward Pool PDA (for refunds on failure)
       const [rewardPoolPDA] = this.getRewardPoolPDA();
 
       const tx = await (this.program.methods as any)
@@ -1262,8 +1261,8 @@ export class ProgramService implements OnModuleInit {
           admin: this.adminKeypair.publicKey,
           ephemeralKey,
           developerWallet: deployRequestAccount.developer,
-          adminPool: platformPoolPDA, // Platform Pool PDA (recovered funds go here)
-          rewardPool: rewardPoolPDA,   // Reward Pool PDA (for refunds on failure)
+          treasuryPda: treasuryPoolPDA, // Treasury Pool PDA (recovered funds go here)
+          rewardPool: rewardPoolPDA,     // Reward Pool PDA (for refunds on failure)
           systemProgram: SystemProgram.programId,
         })
         .signers([this.adminKeypair])
