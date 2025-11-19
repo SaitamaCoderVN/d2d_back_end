@@ -18,7 +18,7 @@ export async function transferProgramAuthority(
     logger.log(`Transferring authority for program ${programId}`);
     logger.log(`  New authority: ${newAuthority}`);
 
-    const command = `${solanaCliPath} program set-upgrade-authority ${programId} --new-upgrade-authority ${newAuthority} --keypair ${currentAuthorityKeypairPath} -u mainnet-beta`;
+    const command = `${solanaCliPath} program set-upgrade-authority ${programId} --new-upgrade-authority ${newAuthority} --keypair ${currentAuthorityKeypairPath} -u devnet`;
     
     logger.log(`Executing: ${command}`);
 
@@ -65,7 +65,7 @@ export async function getProgramAuthority(
   solanaCliPath: string = 'solana',
 ): Promise<{ authority?: string; error?: string }> {
   try {
-    const command = `${solanaCliPath} program show ${programId} -u mainnet-beta`;
+    const command = `${solanaCliPath} program show ${programId} -u devnet`;
     
     const { stdout } = await execAsync(command, {
       timeout: 30000,

@@ -178,25 +178,61 @@ export class ProgramService implements OnModuleInit {
       this.logger.log('🔍 Checking Treasury Pool funds...');
       
       const [treasuryPoolPDA] = this.getTreasuryPoolPDA();
+      
+      // First check if account exists and its size
+      const accountInfo = await this.connection.getAccountInfo(treasuryPoolPDA);
+      if (!accountInfo) {
+        this.logger.warn('⚠️  Treasury Pool account does not exist');
+        this.logger.warn('   Please initialize it first using initializeTreasuryPool()');
+        return;
+      }
+      
+      this.logger.log(`   Account size: ${accountInfo.data.length} bytes`);
+      
+      // Check if account has old layout (< 200 bytes)
+      if (accountInfo.data.length < 200) {
+        this.logger.error('═══════════════════════════════════════════════');
+        this.logger.error('❌ TREASURY POOL HAS OLD STRUCT LAYOUT!');
+        this.logger.error(`   Current size: ${accountInfo.data.length} bytes`);
+        this.logger.error('   Required size: ~278 bytes (new layout)');
+        this.logger.error('');
+        this.logger.error('💡 The treasury pool account was created with an old struct.');
+        this.logger.error('   It needs to be reset and reinitialized.');
+        this.logger.error('');
+        this.logger.error('📋 To fix:');
+        this.logger.error('   1. Close the old account:');
+        this.logger.error(`      solana program close ${treasuryPoolPDA.toString()} --bypass-warning`);
+        this.logger.error('   2. Run reset script:');
+        this.logger.error('      cd d2d_back_end && pnpm ts-node scripts/reset-treasury-pool.ts');
+        this.logger.error('═══════════════════════════════════════════════');
+        return; // Don't try to fetch, it will fail
+      }
+      
+      // Try to fetch with new layout
       const treasuryPoolAccount = await this.program.account.treasuryPool.fetch(
         treasuryPoolPDA,
         'confirmed' // Force confirmed commitment to get latest state
       );
       
-      const totalStakedSOL = treasuryPoolAccount.totalStaked.toNumber() / 1_000_000_000;
+      // Use new struct fields: liquidBalance for available funds
+      const liquidBalanceSOL = (treasuryPoolAccount.liquidBalance?.toNumber() || 0) / 1_000_000_000;
+      // Fallback to legacy field if needed
+      const totalDepositedSOL = (treasuryPoolAccount.totalDeposited?.toNumber() || treasuryPoolAccount.totalStaked?.toNumber() || 0) / 1_000_000_000;
+      const availableBalance = liquidBalanceSOL || totalDepositedSOL;
       const minRequiredSOL = 3; // Minimum 3 SOL for at least 1 deployment
       
-      this.logger.log(`   Total Staked: ${totalStakedSOL.toFixed(4)} SOL`);
+      this.logger.log(`   Liquid Balance: ${liquidBalanceSOL.toFixed(4)} SOL`);
+      this.logger.log(`   Total Deposited: ${totalDepositedSOL.toFixed(4)} SOL`);
       this.logger.log(`   Min Required: ${minRequiredSOL} SOL`);
       
-      if (totalStakedSOL >= minRequiredSOL) {
+      if (availableBalance >= minRequiredSOL) {
         this.logger.log(`✅ Treasury Pool has sufficient funds`);
         return;
       }
 
       // Insufficient funds; just warn and provide guidance instead of auto-staking
       this.logger.warn(`⚠️  Insufficient funds in Treasury Pool`);
-      this.logger.warn(`   Additional stake required: ${(minRequiredSOL - totalStakedSOL).toFixed(4)} SOL`);
+      this.logger.warn(`   Additional stake required: ${(minRequiredSOL - availableBalance).toFixed(4)} SOL`);
       this.logger.warn('   Please stake manually via stakeSolToTreasury() or the staking UI.');
       this.logger.warn('');
       this.logger.warn('   Example CLI:');
@@ -205,18 +241,39 @@ export class ProgramService implements OnModuleInit {
       this.logger.warn('   The backend will continue running, but deployments may fail');
       this.logger.warn('   until sufficient funds are available in the Treasury Pool.');
       this.logger.warn('');
-    } catch (error) {
-      this.logger.error(`❌ Failed to check/fund Treasury Pool: ${error.message}`);
-      
-      // Don't throw - allow backend to start even if staking fails
-      this.logger.warn('');
-      this.logger.warn('⚠️  ⚠️  ⚠️  WARNING ⚠️  ⚠️  ⚠️');
-      this.logger.warn('   Treasury Pool has insufficient funds!');
-      this.logger.warn('   Deployments will fail until funds are added.');
-      this.logger.warn('   Solution: Call stakeSolToTreasury() manually or');
-      this.logger.warn('            ensure admin wallet has sufficient SOL.');
-      this.logger.warn('⚠️  ⚠️  ⚠️  ⚠️  ⚠️  ⚠️  ⚠️  ⚠️  ⚠️  ⚠️');
-      this.logger.warn('');
+    } catch (error: any) {
+      // Check if it's a deserialization error
+      if (error.message?.includes('offset') || 
+          error.message?.includes('AccountDidNotDeserialize') ||
+          error.message?.includes('Failed to deserialize') ||
+          error.message?.includes('beyond buffer length')) {
+        this.logger.error('═══════════════════════════════════════════════');
+        this.logger.error('❌ TREASURY POOL DESERIALIZATION ERROR!');
+        this.logger.error(`   Error: ${error.message}`);
+        this.logger.error('');
+        this.logger.error('💡 The treasury pool account has an incompatible struct layout.');
+        this.logger.error('   This happens when the on-chain account was created with an old struct.');
+        this.logger.error('');
+        this.logger.error('📋 To fix:');
+        this.logger.error('   1. Close the old treasury pool account:');
+        const [treasuryPoolPDA] = this.getTreasuryPoolPDA();
+        this.logger.error(`      solana program close ${treasuryPoolPDA.toString()} --bypass-warning`);
+        this.logger.error('   2. Run reset script:');
+        this.logger.error('      cd d2d_back_end && pnpm ts-node scripts/reset-treasury-pool.ts');
+        this.logger.error('═══════════════════════════════════════════════');
+      } else {
+        this.logger.error(`❌ Failed to check/fund Treasury Pool: ${error.message}`);
+        
+        // Don't throw - allow backend to start even if staking fails
+        this.logger.warn('');
+        this.logger.warn('⚠️  ⚠️  ⚠️  WARNING ⚠️  ⚠️  ⚠️');
+        this.logger.warn('   Treasury Pool has insufficient funds!');
+        this.logger.warn('   Deployments will fail until funds are added.');
+        this.logger.warn('   Solution: Call stakeSolToTreasury() manually or');
+        this.logger.warn('            ensure admin wallet has sufficient SOL.');
+        this.logger.warn('⚠️  ⚠️  ⚠️  ⚠️  ⚠️  ⚠️  ⚠️  ⚠️  ⚠️  ⚠️');
+        this.logger.warn('');
+      }
     }
   }
 
@@ -238,16 +295,16 @@ export class ProgramService implements OnModuleInit {
       this.logger.log(`   Admin: ${this.adminKeypair.publicKey.toString()}`);
       this.logger.log(`   Initial APY: ${initialApy.toString()} basis points (10%)`);
       
-      // Note: treasury_wallet is stored but not used for transfers
-      // Just pass admin's pubkey for backward compatibility
+      // Note: dev_wallet is used in new model (receives deposits)
+      // Just pass admin's pubkey as dev_wallet for now
       const tx = await this.program.methods
         .initialize(
           initialApy,
-          this.adminKeypair.publicKey // Use admin as treasury_wallet (not used for transfers)
+          this.adminKeypair.publicKey // Use admin as dev_wallet
         )
         .accountsPartial({
           admin: this.adminKeypair.publicKey,
-          treasuryWallet: this.adminKeypair.publicKey, // Just for storage, not actual transfers
+          devWallet: this.adminKeypair.publicKey, // Dev wallet that receives deposits
         })
         .signers([this.adminKeypair])
         .rpc();
@@ -303,6 +360,26 @@ export class ProgramService implements OnModuleInit {
   getTreasuryPoolPDA(): [PublicKey, number] {
     return PublicKey.findProgramAddressSync(
       [Buffer.from('treasury_pool')],
+      PROGRAM_ID
+    );
+  }
+
+  /**
+   * Get Reward Pool PDA
+   */
+  getRewardPoolPDA(): [PublicKey, number] {
+    return PublicKey.findProgramAddressSync(
+      [Buffer.from('reward_pool')],
+      PROGRAM_ID
+    );
+  }
+
+  /**
+   * Get Platform Pool PDA
+   */
+  getPlatformPoolPDA(): [PublicKey, number] {
+    return PublicKey.findProgramAddressSync(
+      [Buffer.from('platform_pool')],
       PROGRAM_ID
     );
   }
@@ -374,13 +451,17 @@ export class ProgramService implements OnModuleInit {
         'confirmed'
       );
       
-      const totalStakedSOL = treasuryPoolAccount.totalStaked.toNumber() / 1_000_000_000;
+      // Use new struct fields
+      const liquidBalanceSOL = (treasuryPoolAccount.liquidBalance?.toNumber() || 0) / 1_000_000_000;
+      const totalDepositedSOL = (treasuryPoolAccount.totalDeposited?.toNumber() || treasuryPoolAccount.totalStaked?.toNumber() || 0) / 1_000_000_000;
+      const availableBalance = liquidBalanceSOL || totalDepositedSOL;
       
       this.logger.log(`✅ Verified on-chain state:`);
-      this.logger.log(`   Total Staked: ${totalStakedSOL.toFixed(4)} SOL`);
+      this.logger.log(`   Liquid Balance: ${liquidBalanceSOL.toFixed(4)} SOL`);
+      this.logger.log(`   Total Deposited: ${totalDepositedSOL.toFixed(4)} SOL`);
       
-      if (totalStakedSOL < amount * 0.9) { // Allow 10% tolerance for fees
-        this.logger.warn(`⚠️  Warning: Expected ${amount} SOL but found ${totalStakedSOL} SOL`);
+      if (availableBalance < amount * 0.9) { // Allow 10% tolerance for fees
+        this.logger.warn(`⚠️  Warning: Expected ${amount} SOL but found ${availableBalance} SOL`);
       }
       
       this.logger.log('═══════════════════════════════════════════════');
@@ -572,6 +653,323 @@ export class ProgramService implements OnModuleInit {
    * 2. Backend then deploys using pure Web3.js (BPFLoaderUpgradeable)
    * 3. Backend calls confirmDeploymentSuccess to finalize
    */
+  /**
+   * Create deploy request after payment verification (admin-only)
+   * Payment has already been verified and transferred to treasury pool
+   * This instruction creates the deploy_request and updates user stats
+   */
+  async createDeployRequest(
+    programHash: Buffer,
+    serviceFee: number,
+    monthlyFee: number,
+    initialMonths: number,
+    deploymentCost: number,
+    developer: PublicKey,
+  ): Promise<string> {
+    try {
+      // Validate inputs
+      if (!Buffer.isBuffer(programHash) || programHash.length !== 32) {
+        throw new Error('Invalid program hash: must be 32-byte Buffer');
+      }
+      if (!(developer instanceof PublicKey)) {
+        throw new Error('Invalid developer: must be PublicKey');
+      }
+      if (serviceFee <= 0 || monthlyFee <= 0 || initialMonths <= 0 || deploymentCost <= 0) {
+        throw new Error('Invalid amounts: all values must be positive');
+      }
+
+      // Get PDAs
+      const [treasuryPoolPDA] = this.getTreasuryPoolPDA();
+      const [deployRequestPDA] = PublicKey.findProgramAddressSync(
+        [Buffer.from('deploy_request'), programHash],
+        this.program.programId,
+      );
+      const [userStatsPDA] = PublicKey.findProgramAddressSync(
+        [Buffer.from('user_stats'), developer.toBuffer()],
+        this.program.programId,
+      );
+
+      this.logger.log('═══════════════════════════════════════════════');
+      this.logger.log('📋 Creating deploy request (admin-only)...');
+      this.logger.log('═══════════════════════════════════════════════');
+      this.logger.log(`  Program Hash: ${programHash.toString('hex')}`);
+      this.logger.log(`  Developer: ${developer.toString()}`);
+      this.logger.log(`  Service Fee: ${serviceFee} lamports (${serviceFee / 1e9} SOL)`);
+      this.logger.log(`  Monthly Fee: ${monthlyFee} lamports (${monthlyFee / 1e9} SOL)`);
+      this.logger.log(`  Initial Months: ${initialMonths}`);
+      this.logger.log(`  Deployment Cost: ${deploymentCost} lamports (${deploymentCost / 1e9} SOL)`);
+      this.logger.log('───────────────────────────────────────────────');
+      this.logger.log(`  Treasury Pool PDA: ${treasuryPoolPDA.toString()}`);
+      this.logger.log(`  Deploy Request PDA: ${deployRequestPDA.toString()}`);
+      this.logger.log(`  User Stats PDA: ${userStatsPDA.toString()}`);
+      this.logger.log('═══════════════════════════════════════════════');
+
+      // Convert to BN for u64
+      const serviceFeeU64 = new BN(serviceFee);
+      const monthlyFeeU64 = new BN(monthlyFee);
+      const deploymentCostU64 = new BN(deploymentCost);
+
+      // Fetch treasury pool to verify admin
+      let treasuryPoolAccount;
+      try {
+        treasuryPoolAccount = await this.program.account.treasuryPool.fetch(treasuryPoolPDA);
+        this.logger.log('📋 Treasury Pool Info:');
+        this.logger.log(`   Treasury Pool Admin: ${treasuryPoolAccount.admin.toString()}`);
+        this.logger.log(`   Backend Admin: ${this.adminKeypair.publicKey.toString()}`);
+        
+        if (!treasuryPoolAccount.admin.equals(this.adminKeypair.publicKey)) {
+          this.logger.error('═══════════════════════════════════════════════');
+          this.logger.error('❌ ADMIN MISMATCH DETECTED!');
+          this.logger.error(`   Treasury Pool Admin: ${treasuryPoolAccount.admin.toString()}`);
+          this.logger.error(`   Backend Admin: ${this.adminKeypair.publicKey.toString()}`);
+          this.logger.error('');
+          this.logger.error('💡 The backend admin keypair does not match the treasury pool admin.');
+          this.logger.error('   This will cause "Unauthorized" errors.');
+          this.logger.error('');
+          this.logger.error('📋 To fix:');
+          this.logger.error('   1. Check ADMIN_WALLET_PATH in .env');
+          this.logger.error('   2. Ensure the wallet matches the treasury pool admin');
+          this.logger.error('   3. Or re-initialize treasury pool with current admin');
+          this.logger.error('═══════════════════════════════════════════════');
+          throw new Error(`Admin mismatch: Treasury pool admin is ${treasuryPoolAccount.admin.toString()}, but backend admin is ${this.adminKeypair.publicKey.toString()}`);
+        }
+        this.logger.log('✅ Admin verification passed');
+      } catch (error: any) {
+        if (error.message?.includes('Admin mismatch')) {
+          throw error;
+        }
+        
+        // Check if it's a deserialization error
+        if (error.message?.includes('AccountDidNotDeserialize') || 
+            error.message?.includes('offset') ||
+            error.message?.includes('Failed to deserialize')) {
+          this.logger.error('═══════════════════════════════════════════════');
+          this.logger.error('❌ TREASURY POOL DESERIALIZATION ERROR!');
+          this.logger.error(`   Error: ${error.message}`);
+          this.logger.error('');
+          this.logger.error('💡 The treasury pool account has an incompatible struct layout.');
+          this.logger.error('   This happens when the on-chain account was created with an old struct.');
+          this.logger.error('');
+          this.logger.error('📋 To fix:');
+          this.logger.error('   1. Close the old treasury pool account:');
+          this.logger.error(`      solana program close ${treasuryPoolPDA.toString()} --bypass-warning`);
+          this.logger.error('   2. Reinitialize with new layout:');
+          this.logger.error('      Call initialize() instruction again');
+          this.logger.error('═══════════════════════════════════════════════');
+          throw new Error(`Treasury pool deserialization failed: ${error.message}. Please reset and reinitialize the treasury pool.`);
+        }
+        
+        this.logger.warn(`⚠️  Could not fetch treasury pool: ${error.message}`);
+        this.logger.warn('   Continuing anyway, but may fail with Unauthorized error');
+      }
+
+      // Check if accounts already exist (to avoid unnecessary rent)
+      const deployRequestInfo = await this.connection.getAccountInfo(deployRequestPDA);
+      const userStatsInfo = await this.connection.getAccountInfo(userStatsPDA);
+      const accountsExist = deployRequestInfo !== null && userStatsInfo !== null;
+      
+      // If deploy_request exists, check if it matches current request
+      if (deployRequestInfo !== null) {
+        try {
+          const existingDeployRequest = await this.program.account.deployRequest.fetch(deployRequestPDA);
+          const existingProgramHash = Buffer.from(existingDeployRequest.programHash);
+          const existingDeveloper = existingDeployRequest.developer;
+          const currentProgramHash = programHash;
+          
+          this.logger.log('📋 Existing Deploy Request Found:');
+          this.logger.log(`   Existing Program Hash: ${existingProgramHash.toString('hex')}`);
+          this.logger.log(`   Current Program Hash: ${currentProgramHash.toString('hex')}`);
+          this.logger.log(`   Existing Developer: ${existingDeveloper.toString()}`);
+          this.logger.log(`   Current Developer: ${developer.toString()}`);
+          this.logger.log(`   Status: ${JSON.stringify(existingDeployRequest.status)}`);
+          this.logger.log(`   Ephemeral Key: ${existingDeployRequest.ephemeralKey ? existingDeployRequest.ephemeralKey.toString() : 'None'}`);
+          this.logger.log(`   Deployed Program ID: ${existingDeployRequest.deployedProgramId ? existingDeployRequest.deployedProgramId.toString() : 'None'}`);
+          this.logger.log(`   Subscription Paid Until: ${new Date(existingDeployRequest.subscriptionPaidUntil.toNumber() * 1000).toISOString()}`);
+          
+          // Check if it's a match
+          const hashMatch = existingProgramHash.equals(currentProgramHash);
+          const developerMatch = existingDeveloper.equals(developer);
+          
+          if (!hashMatch || !developerMatch) {
+            const currentTime = Math.floor(Date.now() / 1000);
+            const subscriptionExpired = currentTime > existingDeployRequest.subscriptionPaidUntil.toNumber();
+            
+            // Anchor enum can be object like { pendingDeployment: {} } or string
+            const statusValue = typeof existingDeployRequest.status === 'object' 
+              ? Object.keys(existingDeployRequest.status)[0] 
+              : existingDeployRequest.status;
+            
+            const canReset = 
+              statusValue === 'failed' ||
+              statusValue === 'cancelled' ||
+              statusValue === 'closed' ||
+              statusValue === 'subscriptionExpired' ||
+              statusValue === 'suspended' ||
+              (statusValue === 'pendingDeployment' && !existingDeployRequest.ephemeralKey) ||
+              (statusValue === 'active' && subscriptionExpired);
+            
+            this.logger.error('═══════════════════════════════════════════════');
+            this.logger.error('❌ DEPLOY REQUEST MISMATCH!');
+            this.logger.error(`   Existing deploy_request does not match current request.`);
+            this.logger.error(`   Status: ${JSON.stringify(existingDeployRequest.status)} (parsed: ${statusValue})`);
+            this.logger.error(`   Can Reset: ${canReset}`);
+            this.logger.error(`   Subscription Expired: ${subscriptionExpired}`);
+            this.logger.error(`   Ephemeral Key: ${existingDeployRequest.ephemeralKey ? 'exists' : 'none'}`);
+            this.logger.error(`   This can happen if:`);
+            this.logger.error(`   1. Same program_hash was used by different developer`);
+            this.logger.error(`   2. Previous deployment is still active`);
+            this.logger.error('');
+            
+            if (!canReset) {
+              this.logger.error('💡 Solutions:');
+              this.logger.error('   1. Use a different program (different hash)');
+              this.logger.error('   2. Wait for subscription to expire');
+              this.logger.error('   3. Contact admin to close the existing deploy_request');
+              this.logger.error('═══════════════════════════════════════════════');
+              throw new Error(`Deploy request already exists with different developer and cannot be reset. Status: ${statusValue}, Subscription expires: ${new Date(existingDeployRequest.subscriptionPaidUntil.toNumber() * 1000).toISOString()}`);
+            } else {
+              this.logger.log('⚠️  Deploy request exists but can be reset - will proceed');
+            }
+          } else {
+            this.logger.log('✅ Existing deploy_request matches current request - will update');
+          }
+        } catch (fetchError: any) {
+          this.logger.warn(`⚠️  Could not fetch existing deploy_request: ${fetchError.message}`);
+          this.logger.warn('   Continuing anyway, but may fail with InvalidRequestId error');
+        }
+      }
+      
+      // Check admin balance before creating accounts
+      const adminBalance = await this.connection.getBalance(this.adminKeypair.publicKey);
+      const estimatedFee = 10000; // Transaction fee (higher estimate for safety)
+      
+      // Calculate required balance
+      let requiredBalance = estimatedFee;
+      if (!accountsExist) {
+        // Need rent exemption if accounts don't exist
+        const deployRequestRent = await this.connection.getMinimumBalanceForRentExemption(8 + 200);
+        const userStatsRent = await this.connection.getMinimumBalanceForRentExemption(8 + 100);
+        requiredBalance += deployRequestRent + userStatsRent;
+      }
+      
+      this.logger.log('📝 Transaction Details:');
+      this.logger.log(`   Developer: ${developer.toString()} (not a signer, payment already verified)`);
+      this.logger.log(`   Admin: ${this.adminKeypair.publicKey.toString()} (signer)`);
+      this.logger.log(`   Admin Balance: ${(adminBalance / 1e9).toFixed(4)} SOL`);
+      this.logger.log(`   Accounts Exist: ${accountsExist ? 'Yes' : 'No'}`);
+      this.logger.log(`   Required Balance: ${(requiredBalance / 1e9).toFixed(4)} SOL (${accountsExist ? 'fees only' : 'rent + fees'})`);
+      
+      if (adminBalance < requiredBalance) {
+        const shortfall = requiredBalance - adminBalance;
+        this.logger.warn(`⚠️  Admin balance insufficient. Shortfall: ${(shortfall / 1e9).toFixed(4)} SOL`);
+        
+        // In devnet, try to request airdrop
+        if (process.env.SOLANA_ENV === 'devnet') {
+          this.logger.log('💰 Requesting airdrop for admin account...');
+          try {
+            const airdropAmount = Math.max(shortfall + 0.1 * 1e9, 1 * 1e9); // At least 1 SOL, add buffer
+            const airdropSig = await this.connection.requestAirdrop(
+              this.adminKeypair.publicKey,
+              airdropAmount
+            );
+            this.logger.log(`   Airdrop signature: ${airdropSig}`);
+            
+            // Wait for confirmation
+            await this.connection.confirmTransaction(airdropSig, 'confirmed');
+            this.logger.log('✅ Airdrop confirmed');
+            
+            // Recheck balance
+            const newBalance = await this.connection.getBalance(this.adminKeypair.publicKey);
+            this.logger.log(`   New Admin Balance: ${(newBalance / 1e9).toFixed(4)} SOL`);
+          } catch (airdropError: any) {
+            this.logger.error(`❌ Airdrop failed: ${airdropError.message}`);
+            throw new Error(`Admin balance insufficient (${(adminBalance / 1e9).toFixed(4)} SOL) and airdrop failed. Please fund admin account with at least ${(requiredBalance / 1e9).toFixed(4)} SOL`);
+          }
+        } else {
+          throw new Error(`Admin balance insufficient (${(adminBalance / 1e9).toFixed(4)} SOL). Required: ${(requiredBalance / 1e9).toFixed(4)} SOL`);
+        }
+      }
+
+      // Call create_deploy_request instruction (admin-only, no developer signature needed)
+      const tx = await this.program.methods
+        .createDeployRequest(
+          Array.from(programHash),
+          serviceFeeU64,
+          monthlyFeeU64,
+          initialMonths,
+          deploymentCostU64
+        )
+        .accountsPartial({
+          developer: developer,
+          admin: this.adminKeypair.publicKey,
+        })
+        .signers([this.adminKeypair]) // Only admin needs to sign
+        .rpc();
+
+      this.logger.log('');
+      this.logger.log('✅ Deploy request created successfully!');
+      this.logger.log(`   Transaction: ${tx}`);
+      this.logger.log(`   Deploy request created with status: PendingDeployment`);
+      this.logger.log(`   Developer payment already verified and transferred`);
+      this.logger.log(`   Deployment cost reserved: ${deploymentCost / 1e9} SOL`);
+      this.logger.log('   Deployment cost reserved in Treasury Pool (temporary wallet will be funded later)');
+      this.logger.log(`   Note: Temporary wallet will be funded separately by backend`);
+      this.logger.log(`   Explorer: https://explorer.solana.com/tx/${tx}?cluster=${process.env.SOLANA_ENV || 'devnet'}`);
+      this.logger.log('═══════════════════════════════════════════════');
+      
+      return tx;
+    } catch (error: any) {
+      this.logger.error('═══════════════════════════════════════════════');
+      this.logger.error(`❌ Failed to create deploy request`);
+      this.logger.error(`   Error: ${error.message}`);
+      
+      // Extract Anchor error details
+      if (error.programError) {
+        this.logger.error(`   Program Error Code: ${error.programError.code}`);
+        this.logger.error(`   Program Error Name: ${error.programError.name}`);
+        this.logger.error(`   Program Error Message: ${error.programError.msg || 'N/A'}`);
+      }
+      
+      // Extract logs if available
+      if (error.logs && Array.isArray(error.logs)) {
+        this.logger.error(`   Program Logs:`);
+        error.logs.forEach((log: string, i: number) => {
+          this.logger.error(`     [${i}] ${log}`);
+        });
+      }
+      
+      // Try to get logs from error object if not directly available
+      if (error.error && error.error.logs) {
+        this.logger.error(`   Error Logs (from error.error):`);
+        error.error.logs.forEach((log: string, i: number) => {
+          this.logger.error(`     [${i}] ${log}`);
+        });
+      }
+      
+      // Log full error object for debugging
+      this.logger.error(`   Error Type: ${error.constructor?.name || typeof error}`);
+      if (error.stack) {
+        this.logger.error(`   Stack: ${error.stack}`);
+      }
+      
+      // Build detailed error message
+      let errorMessage = error.message || 'Unknown error';
+      if (error.programError) {
+        errorMessage += ` (Program Error: ${error.programError.name || error.programError.code})`;
+      }
+      if (error.logs && error.logs.length > 0) {
+        errorMessage += ` - Check logs above for details`;
+      }
+      
+      this.logger.error('═══════════════════════════════════════════════');
+      
+      throw new Error(`Failed to create deploy request: ${errorMessage}`);
+    }
+  }
+
+  /**
+   * @deprecated Use createDeployRequest instead (admin-only, no developer signature needed)
+   */
   async requestDeploymentFunds(
     programHash: Buffer,
     serviceFee: number,
@@ -636,7 +1034,20 @@ export class ProgramService implements OnModuleInit {
         this.logger.warn('⚠️  DEV MODE: Using admin as developer (testing only)');
       }
 
-      // Call request_deployment_funds instruction (without ephemeral key)
+      // Get treasury wallet from treasury pool (or use admin as fallback)
+      // The treasury wallet is stored in the treasury pool account
+      // For now, we'll use admin's pubkey as it's set during initialization
+      const treasuryWallet = this.adminKeypair.publicKey;
+
+      this.logger.log('📝 Transaction Details:');
+      this.logger.log(`   Developer: ${effectiveDeveloper.toString()}`);
+      this.logger.log(`   Admin: ${this.adminKeypair.publicKey.toString()}`);
+      this.logger.log(`   Treasury Wallet: ${treasuryWallet.toString()}`);
+      this.logger.log(`   Using same keypair for dev/admin: ${isDevelopment}`);
+
+      // Call request_deployment_funds instruction
+      // Note: Both developer and admin must sign, but if they're the same in dev mode,
+      // we only need one signer
       const tx = await this.program.methods
         .requestDeploymentFunds(
           Array.from(programHash),
@@ -648,9 +1059,9 @@ export class ProgramService implements OnModuleInit {
         .accountsPartial({
           developer: effectiveDeveloper,
           admin: this.adminKeypair.publicKey,
-          treasuryWallet: this.adminKeypair.publicKey, // Just for validation, not used for transfers
+          treasuryWallet: treasuryWallet,
         })
-        .signers([this.adminKeypair])
+        .signers([this.adminKeypair]) // Both developer and admin are the same in dev mode
         .rpc();
 
       this.logger.log('');
@@ -665,20 +1076,52 @@ export class ProgramService implements OnModuleInit {
       this.logger.log('═══════════════════════════════════════════════');
       
       return tx;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error('═══════════════════════════════════════════════');
       this.logger.error(`❌ Failed to request deployment funds`);
       this.logger.error(`   Error: ${error.message}`);
-      if (error.logs) {
+      
+      // Extract Anchor error details
+      if (error.programError) {
+        this.logger.error(`   Program Error Code: ${error.programError.code}`);
+        this.logger.error(`   Program Error Name: ${error.programError.name}`);
+        this.logger.error(`   Program Error Message: ${error.programError.msg || 'N/A'}`);
+      }
+      
+      // Extract logs if available
+      if (error.logs && Array.isArray(error.logs)) {
         this.logger.error(`   Program Logs:`);
         error.logs.forEach((log: string, i: number) => {
           this.logger.error(`     [${i}] ${log}`);
         });
       }
-      this.logger.error(`   Stack: ${error.stack}`);
+      
+      // Try to get logs from error object if not directly available
+      if (error.error && error.error.logs) {
+        this.logger.error(`   Error Logs (from error.error):`);
+        error.error.logs.forEach((log: string, i: number) => {
+          this.logger.error(`     [${i}] ${log}`);
+        });
+      }
+      
+      // Log full error object for debugging
+      this.logger.error(`   Error Type: ${error.constructor?.name || typeof error}`);
+      if (error.stack) {
+        this.logger.error(`   Stack: ${error.stack}`);
+      }
+      
+      // Build detailed error message
+      let errorMessage = error.message || 'Unknown error';
+      if (error.programError) {
+        errorMessage += ` (Program Error: ${error.programError.name || error.programError.code})`;
+      }
+      if (error.logs && error.logs.length > 0) {
+        errorMessage += ` - Check logs above for details`;
+      }
+      
       this.logger.error('═══════════════════════════════════════════════');
       
-      throw new Error(`Failed to request deployment funds: ${error.message}`);
+      throw new Error(`Failed to request deployment funds: ${errorMessage}`);
     }
   }
 
@@ -711,26 +1154,56 @@ export class ProgramService implements OnModuleInit {
       const deploymentCostU64 = new BN(deploymentCost);
 
       // Call fund_temporary_wallet instruction
-      const tx = await (this.program.methods as any)
-        .fundTemporaryWallet(
-          Array.from(programHash),
-          deploymentCostU64
-        )
-        .accountsPartial({
-          admin: this.adminKeypair.publicKey,
-          temporaryWallet: temporaryWalletPubkey,
-        })
-        .signers([this.adminKeypair])
-        .rpc();
-
-      this.logger.log('');
-      this.logger.log('✅ Temporary wallet funded successfully!');
-      this.logger.log(`   Transaction: ${tx}`);
-      this.logger.log(`   Temporary wallet received: ${deploymentCost / 1e9} SOL`);
-      this.logger.log(`   Explorer: https://explorer.solana.com/tx/${tx}?cluster=${process.env.SOLANA_ENV || 'devnet'}`);
-      this.logger.log('═══════════════════════════════════════════════');
+      // Parameters: request_id: [u8; 32], amount: u64, use_admin_pool: bool
+      const requestIdArray = Array.from(programHash);
+      const useAdminPool = false; // false = use Reward Pool (preferred)
       
-      return tx;
+      this.logger.log('   Preparing instruction parameters:');
+      this.logger.log(`     requestId: ${Buffer.from(programHash).toString('hex')}`);
+      this.logger.log(`     amount: ${deploymentCostU64.toString()} lamports`);
+      this.logger.log(`     useAdminPool: ${useAdminPool}`);
+      this.logger.log('   Accounts:');
+      this.logger.log(`     treasury_pool: ${treasuryPoolPDA.toString()}`);
+      this.logger.log(`     deploy_request: ${deployRequestPDA.toString()}`);
+      this.logger.log(`     treasury_pda: ${treasuryPoolPDA.toString()}`);
+      this.logger.log(`     temporary_wallet: ${temporaryWalletPubkey.toString()}`);
+      
+      try {
+        const tx = await this.program.methods
+          .fundTemporaryWallet(
+            requestIdArray,
+            deploymentCostU64,
+            useAdminPool
+          )
+          .accountsPartial({
+            treasuryPool: treasuryPoolPDA,
+            deployRequest: deployRequestPDA,
+            admin: this.adminKeypair.publicKey,
+            treasuryPda: treasuryPoolPDA, // Same as treasuryPool (Treasury Pool PDA)
+            temporaryWallet: temporaryWalletPubkey,
+          } as any) // TypeScript types use camelCase, but IDL uses snake_case - Anchor handles conversion
+          .signers([this.adminKeypair])
+          .rpc();
+        
+        this.logger.log('');
+        this.logger.log('✅ Temporary wallet funded successfully!');
+        this.logger.log(`   Transaction: ${tx}`);
+        this.logger.log(`   Temporary wallet received: ${deploymentCost / 1e9} SOL`);
+        this.logger.log(`   Explorer: https://explorer.solana.com/tx/${tx}?cluster=${process.env.SOLANA_ENV || 'devnet'}`);
+        this.logger.log('═══════════════════════════════════════════════');
+        
+        return tx;
+      } catch (innerError: any) {
+        this.logger.error('❌ Failed to fund temporary wallet (inner error)');
+        this.logger.error(`   Error: ${innerError.message}`);
+        if (innerError.logs) {
+          this.logger.error('   Program logs:');
+          innerError.logs.forEach((log: string) => {
+            this.logger.error(`     ${log}`);
+          });
+        }
+        throw innerError;
+      }
     } catch (error) {
       this.logger.error('═══════════════════════════════════════════════');
       this.logger.error(`❌ Failed to fund temporary wallet`);
@@ -773,6 +1246,10 @@ export class ProgramService implements OnModuleInit {
       this.logger.log(`  Deployed Program ID: ${deployedProgramId.toString()}`);
       this.logger.log(`  Ephemeral Key: ${ephemeralKey.toString()}`);
 
+      // Get Platform Pool and Reward Pool PDAs
+      const [platformPoolPDA] = this.getPlatformPoolPDA();
+      const [rewardPoolPDA] = this.getRewardPoolPDA();
+
       const tx = await (this.program.methods as any)
         .confirmDeploymentSuccess(
           Array.from(programHash),
@@ -785,6 +1262,8 @@ export class ProgramService implements OnModuleInit {
           admin: this.adminKeypair.publicKey,
           ephemeralKey,
           developerWallet: deployRequestAccount.developer,
+          adminPool: platformPoolPDA, // Platform Pool PDA (recovered funds go here)
+          rewardPool: rewardPoolPDA,   // Reward Pool PDA (for refunds on failure)
           systemProgram: SystemProgram.programId,
         })
         .signers([this.adminKeypair])
@@ -827,6 +1306,10 @@ export class ProgramService implements OnModuleInit {
       this.logger.log('Confirming deployment failure...');
       this.logger.log(`  Reason: ${failureReason}`);
       
+      // Get Platform Pool and Reward Pool PDAs
+      const [platformPoolPDA] = this.getPlatformPoolPDA();
+      const [rewardPoolPDA] = this.getRewardPoolPDA();
+      
       const tx = await (this.program.methods as any)
         .confirmDeploymentFailure(
           Array.from(requestId),
@@ -838,6 +1321,8 @@ export class ProgramService implements OnModuleInit {
           admin: this.adminKeypair.publicKey,
           developerWallet: developer,
           ephemeralKey,
+          adminPool: platformPoolPDA, // Platform Pool PDA (recovered funds go here)
+          rewardPool: rewardPoolPDA,   // Reward Pool PDA (for refunds on failure)
           systemProgram: SystemProgram.programId,
         })
         .signers([this.adminKeypair])
@@ -898,6 +1383,49 @@ export class ProgramService implements OnModuleInit {
    */
   getAdminKeypair(): Keypair {
     return this.adminKeypair;
+  }
+
+  /**
+   * Get Backer Deposit PDA
+   */
+  getBackerDepositPDA(backer: PublicKey): [PublicKey, number] {
+    return PublicKey.findProgramAddressSync(
+      [Buffer.from('lender_stake'), backer.toBuffer()],
+      PROGRAM_ID
+    );
+  }
+
+  /**
+   * Credit fees to pools and update reward_per_share
+   * Admin-only instruction
+   */
+  async creditFeeToPool(feeReward: number, feePlatform: number): Promise<string> {
+    try {
+      const [treasuryPoolPDA] = this.getTreasuryPoolPDA();
+      const [rewardPoolPDA] = PublicKey.findProgramAddressSync(
+        [Buffer.from('reward_pool')],
+        PROGRAM_ID
+      );
+      const [platformPoolPDA] = PublicKey.findProgramAddressSync(
+        [Buffer.from('platform_pool')],
+        PROGRAM_ID
+      );
+
+      const tx = await this.program.methods
+        .creditFeeToPool(new BN(feeReward), new BN(feePlatform))
+        .accountsPartial({
+          admin: this.adminKeypair.publicKey,
+        })
+        .signers([this.adminKeypair])
+        .rpc();
+
+      this.logger.log(`✅ Fees credited: reward=${feeReward}, platform=${feePlatform} lamports`);
+      this.logger.log(`   Transaction: ${tx}`);
+      return tx;
+    } catch (error) {
+      this.logger.error(`Failed to credit fees: ${error.message}`);
+      throw error;
+    }
   }
 
   /**

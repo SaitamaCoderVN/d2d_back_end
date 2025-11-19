@@ -14,6 +14,99 @@ export type D2dProgramSol = {
   },
   "instructions": [
     {
+      "name": "adminWithdraw",
+      "docs": [
+        "Admin withdraw funds from Admin Pool"
+      ],
+      "discriminator": [
+        160,
+        166,
+        147,
+        222,
+        46,
+        220,
+        75,
+        224
+      ],
+      "accounts": [
+        {
+          "name": "treasuryPool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  101,
+                  97,
+                  115,
+                  117,
+                  114,
+                  121,
+                  95,
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "adminPool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  116,
+                  102,
+                  111,
+                  114,
+                  109,
+                  95,
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "destination",
+          "writable": true
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        },
+        {
+          "name": "reason",
+          "type": "string"
+        }
+      ]
+    },
+    {
       "name": "claimRewards",
       "docs": [
         "Lender claim accumulated rewards"
@@ -45,6 +138,30 @@ export type D2dProgramSol = {
                   117,
                   114,
                   121,
+                  95,
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "rewardPool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  119,
+                  97,
+                  114,
+                  100,
                   95,
                   112,
                   111,
@@ -200,6 +317,72 @@ export type D2dProgramSol = {
       ]
     },
     {
+      "name": "closeTreasuryPool",
+      "docs": [
+        "Close Treasury Pool account (Admin only)",
+        "",
+        "This closes the treasury pool account and transfers all lamports to admin.",
+        "Does NOT require deserializing the account, so it works with old struct layouts.",
+        "",
+        "After closing, call reinitialize_treasury_pool() to create a new account with the updated layout."
+      ],
+      "discriminator": [
+        74,
+        23,
+        235,
+        188,
+        143,
+        125,
+        223,
+        245
+      ],
+      "accounts": [
+        {
+          "name": "treasuryPool",
+          "docs": [
+            "We use UncheckedAccount to avoid deserialization (works with old layouts)",
+            "PDA seeds are verified by Anchor constraint, so it's safe to use UncheckedAccount"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  101,
+                  97,
+                  115,
+                  117,
+                  114,
+                  121,
+                  95,
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "docs": [
+            "Admin who will receive the lamports"
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "confirmDeploymentFailure",
       "docs": [
         "Admin confirm deployment failure"
@@ -285,6 +468,59 @@ export type D2dProgramSol = {
         {
           "name": "developerWallet",
           "writable": true
+        },
+        {
+          "name": "adminPool",
+          "docs": [
+            "Note: ADMIN_POOL_SEED maps to platform_pool for backward compatibility"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  116,
+                  102,
+                  111,
+                  114,
+                  109,
+                  95,
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "rewardPool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  119,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
         },
         {
           "name": "systemProgram",
@@ -395,6 +631,59 @@ export type D2dProgramSol = {
           "writable": true
         },
         {
+          "name": "adminPool",
+          "docs": [
+            "Note: ADMIN_POOL_SEED maps to platform_pool for backward compatibility"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  116,
+                  102,
+                  111,
+                  114,
+                  109,
+                  95,
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "rewardPool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  119,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
           "name": "systemProgram",
           "address": "11111111111111111111111111111111"
         }
@@ -412,6 +701,295 @@ export type D2dProgramSol = {
         {
           "name": "deployedProgramId",
           "type": "pubkey"
+        },
+        {
+          "name": "recoveredFunds",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "createDeployRequest",
+      "docs": [
+        "Admin create deploy request after payment verification",
+        "Only backend admin can call this after verifying developer payment",
+        "Payment has already been transferred to Reward Pool"
+      ],
+      "discriminator": [
+        249,
+        143,
+        63,
+        75,
+        67,
+        107,
+        0,
+        146
+      ],
+      "accounts": [
+        {
+          "name": "treasuryPool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  101,
+                  97,
+                  115,
+                  117,
+                  114,
+                  121,
+                  95,
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "rewardPool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  119,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "deployRequest",
+          "docs": [
+            "We use UncheckedAccount to handle old layouts, then manually deserialize/resize"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  100,
+                  101,
+                  112,
+                  108,
+                  111,
+                  121,
+                  95,
+                  114,
+                  101,
+                  113,
+                  117,
+                  101,
+                  115,
+                  116
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "programHash"
+              }
+            ]
+          }
+        },
+        {
+          "name": "userStats",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  117,
+                  115,
+                  101,
+                  114,
+                  95,
+                  115,
+                  116,
+                  97,
+                  116,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "developer"
+              }
+            ]
+          }
+        },
+        {
+          "name": "developer",
+          "writable": true
+        },
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "programHash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "serviceFee",
+          "type": "u64"
+        },
+        {
+          "name": "monthlyFee",
+          "type": "u64"
+        },
+        {
+          "name": "initialMonths",
+          "type": "u32"
+        },
+        {
+          "name": "deploymentCost",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "creditFeeToPool",
+      "docs": [
+        "Credit fees to pools and update reward_per_share",
+        "Admin/backend only - called when devs pay fees"
+      ],
+      "discriminator": [
+        168,
+        40,
+        70,
+        186,
+        61,
+        14,
+        167,
+        178
+      ],
+      "accounts": [
+        {
+          "name": "treasuryPool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  101,
+                  97,
+                  115,
+                  117,
+                  114,
+                  121,
+                  95,
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "rewardPool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  119,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "platformPool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  116,
+                  102,
+                  111,
+                  114,
+                  109,
+                  95,
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "feeReward",
+          "type": "u64"
+        },
+        {
+          "name": "feePlatform",
+          "type": "u64"
         }
       ]
     },
@@ -625,7 +1203,8 @@ export type D2dProgramSol = {
       "name": "fundTemporaryWallet",
       "docs": [
         "Admin fund temporary wallet for deployment",
-        "Only backend admin can call this to transfer deployment funds"
+        "Only backend admin can call this to transfer deployment funds",
+        "use_admin_pool: true = use Admin Pool, false = use Reward Pool (preferred)"
       ],
       "discriminator": [
         195,
@@ -701,6 +1280,32 @@ export type D2dProgramSol = {
           "signer": true
         },
         {
+          "name": "treasuryPda",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  101,
+                  97,
+                  115,
+                  117,
+                  114,
+                  121,
+                  95,
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
           "name": "temporaryWallet",
           "writable": true
         }
@@ -718,6 +1323,10 @@ export type D2dProgramSol = {
         {
           "name": "amount",
           "type": "u64"
+        },
+        {
+          "name": "useAdminPool",
+          "type": "bool"
         }
       ]
     },
@@ -764,12 +1373,62 @@ export type D2dProgramSol = {
           }
         },
         {
+          "name": "rewardPool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  119,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "platformPool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  116,
+                  102,
+                  111,
+                  114,
+                  109,
+                  95,
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
           "name": "admin",
           "writable": true,
           "signer": true
         },
         {
-          "name": "treasuryWallet"
+          "name": "devWallet"
         },
         {
           "name": "systemProgram",
@@ -782,7 +1441,7 @@ export type D2dProgramSol = {
           "type": "u64"
         },
         {
-          "name": "treasuryWallet",
+          "name": "devWallet",
           "type": "pubkey"
         }
       ]
@@ -887,6 +1546,130 @@ export type D2dProgramSol = {
         {
           "name": "months",
           "type": "u32"
+        }
+      ]
+    },
+    {
+      "name": "reinitializeTreasuryPool",
+      "docs": [
+        "Reinitialize Treasury Pool (Admin only)",
+        "",
+        "This reinitializes an existing treasury pool account with new struct layout.",
+        "Works even if the account has old layout or is rent-exempt.",
+        "",
+        "Use this after closing the old account to migrate to new layout."
+      ],
+      "discriminator": [
+        119,
+        63,
+        199,
+        102,
+        0,
+        102,
+        85,
+        113
+      ],
+      "accounts": [
+        {
+          "name": "treasuryPool",
+          "docs": [
+            "We use UncheckedAccount to avoid deserialization, then manually resize and initialize"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  101,
+                  97,
+                  115,
+                  117,
+                  114,
+                  121,
+                  95,
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "rewardPool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  119,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "platformPool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  116,
+                  102,
+                  111,
+                  114,
+                  109,
+                  95,
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "devWallet"
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "initialApy",
+          "type": "u64"
+        },
+        {
+          "name": "devWallet",
+          "type": "pubkey"
         }
       ]
     },
@@ -1081,6 +1864,32 @@ export type D2dProgramSol = {
           }
         },
         {
+          "name": "treasuryPda",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  101,
+                  97,
+                  115,
+                  117,
+                  114,
+                  121,
+                  95,
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
           "name": "lenderStake",
           "writable": true,
           "pda": {
@@ -1198,6 +2007,32 @@ export type D2dProgramSol = {
       "accounts": [
         {
           "name": "treasuryPool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  101,
+                  97,
+                  115,
+                  117,
+                  114,
+                  121,
+                  95,
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "treasuryPda",
           "writable": true,
           "pda": {
             "seeds": [
@@ -1380,6 +2215,32 @@ export type D2dProgramSol = {
   ],
   "events": [
     {
+      "name": "adminMovedToRewardPool",
+      "discriminator": [
+        57,
+        140,
+        253,
+        235,
+        44,
+        7,
+        54,
+        26
+      ]
+    },
+    {
+      "name": "adminWithdrew",
+      "discriminator": [
+        128,
+        19,
+        176,
+        57,
+        89,
+        78,
+        139,
+        246
+      ]
+    },
+    {
       "name": "apyUpdated",
       "discriminator": [
         128,
@@ -1390,6 +2251,19 @@ export type D2dProgramSol = {
         150,
         84,
         41
+      ]
+    },
+    {
+      "name": "claimed",
+      "discriminator": [
+        217,
+        192,
+        123,
+        72,
+        108,
+        150,
+        248,
+        33
       ]
     },
     {
@@ -1445,6 +2319,19 @@ export type D2dProgramSol = {
       ]
     },
     {
+      "name": "depositMade",
+      "discriminator": [
+        210,
+        201,
+        130,
+        183,
+        244,
+        203,
+        155,
+        199
+      ]
+    },
+    {
       "name": "emergencyPauseToggled",
       "discriminator": [
         68,
@@ -1494,6 +2381,19 @@ export type D2dProgramSol = {
         51,
         147,
         36
+      ]
+    },
+    {
+      "name": "rewardCredited",
+      "discriminator": [
+        21,
+        16,
+        94,
+        56,
+        44,
+        11,
+        160,
+        202
       ]
     },
     {
@@ -1585,6 +2485,19 @@ export type D2dProgramSol = {
         145,
         55,
         179
+      ]
+    },
+    {
+      "name": "withdrawRequested",
+      "discriminator": [
+        114,
+        16,
+        240,
+        206,
+        93,
+        128,
+        151,
+        39
       ]
     }
   ],
@@ -1693,9 +2606,97 @@ export type D2dProgramSol = {
       "code": 6020,
       "name": "timeElapsedTooLarge",
       "msg": "Time elapsed too large"
+    },
+    {
+      "code": 6021,
+      "name": "negativeTimeElapsed",
+      "msg": "Negative time elapsed - clock error detected"
+    },
+    {
+      "code": 6022,
+      "name": "invalidRecoveredFunds",
+      "msg": "Recovered funds exceed deployment cost"
+    },
+    {
+      "code": 6023,
+      "name": "lockPeriodTooLong",
+      "msg": "Lock period exceeds maximum allowed (10 years)"
+    },
+    {
+      "code": 6024,
+      "name": "insufficientPrincipalFunds",
+      "msg": "Insufficient principal funds in treasury pool"
+    },
+    {
+      "code": 6025,
+      "name": "feeAmountTooLarge",
+      "msg": "Fee amount exceeds maximum allowed"
+    },
+    {
+      "code": 6026,
+      "name": "insufficientLiquidBalance",
+      "msg": "Insufficient liquid balance for withdrawal"
+    },
+    {
+      "code": 6027,
+      "name": "divisionByZero",
+      "msg": "Division by zero - total deposits is zero"
+    },
+    {
+      "code": 6028,
+      "name": "invalidWithdrawalRequest",
+      "msg": "Invalid withdrawal request"
     }
   ],
   "types": [
+    {
+      "name": "adminMovedToRewardPool",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "movedAt",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "adminWithdrew",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "destination",
+            "type": "pubkey"
+          },
+          {
+            "name": "reason",
+            "type": "string"
+          },
+          {
+            "name": "withdrawnAt",
+            "type": "i64"
+          }
+        ]
+      }
+    },
     {
       "name": "apyUpdated",
       "type": {
@@ -1720,7 +2721,11 @@ export type D2dProgramSol = {
       "name": "backerDeposit",
       "docs": [
         "Backer's deposit position in the pool",
-        "Renamed from LenderStake for better clarity"
+        "",
+        "Reward-per-share model:",
+        "- deposited_amount: Amount of SOL deposited (net after fees)",
+        "- reward_debt: Tracks accumulated rewards at deposit time (deposited_amount * reward_per_share)",
+        "- claimed_total: Total rewards claimed so far"
       ],
       "type": {
         "kind": "struct",
@@ -1735,35 +2740,47 @@ export type D2dProgramSol = {
           },
           {
             "name": "rewardDebt",
+            "type": "u128"
+          },
+          {
+            "name": "claimedTotal",
             "type": "u64"
-          },
-          {
-            "name": "lastClaimTime",
-            "type": "i64"
-          },
-          {
-            "name": "totalClaimed",
-            "type": "u64"
-          },
-          {
-            "name": "depositTime",
-            "type": "i64"
-          },
-          {
-            "name": "lockPeriod",
-            "type": "i64"
           },
           {
             "name": "isActive",
             "type": "bool"
           },
           {
-            "name": "deploymentsSupported",
-            "type": "u32"
-          },
-          {
             "name": "bump",
             "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "claimed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "backer",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "claimedTotal",
+            "type": "u64"
+          },
+          {
+            "name": "rewardPerShare",
+            "type": "u128"
+          },
+          {
+            "name": "claimedAt",
+            "type": "i64"
           }
         ]
       }
@@ -1805,6 +2822,10 @@ export type D2dProgramSol = {
           },
           {
             "name": "deploymentCost",
+            "type": "u64"
+          },
+          {
+            "name": "borrowedAmount",
             "type": "u64"
           },
           {
@@ -1944,6 +2965,10 @@ export type D2dProgramSol = {
             "type": "u64"
           },
           {
+            "name": "recoveredFunds",
+            "type": "u64"
+          },
+          {
             "name": "confirmedAt",
             "type": "i64"
           }
@@ -2036,6 +3061,46 @@ export type D2dProgramSol = {
           },
           {
             "name": "requestedAt",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "depositMade",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "backer",
+            "type": "pubkey"
+          },
+          {
+            "name": "depositAmount",
+            "type": "u64"
+          },
+          {
+            "name": "netDeposit",
+            "type": "u64"
+          },
+          {
+            "name": "rewardFee",
+            "type": "u64"
+          },
+          {
+            "name": "platformFee",
+            "type": "u64"
+          },
+          {
+            "name": "totalDeposited",
+            "type": "u64"
+          },
+          {
+            "name": "liquidBalance",
+            "type": "u64"
+          },
+          {
+            "name": "depositedAt",
             "type": "i64"
           }
         ]
@@ -2159,6 +3224,34 @@ export type D2dProgramSol = {
           },
           {
             "name": "suspendedAt",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "rewardCredited",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "feeReward",
+            "type": "u64"
+          },
+          {
+            "name": "feePlatform",
+            "type": "u64"
+          },
+          {
+            "name": "rewardPerShare",
+            "type": "u128"
+          },
+          {
+            "name": "totalDeposited",
+            "type": "u64"
+          },
+          {
+            "name": "creditedAt",
             "type": "i64"
           }
         ]
@@ -2336,15 +3429,103 @@ export type D2dProgramSol = {
     },
     {
       "name": "treasuryPool",
+      "docs": [
+        "Fee-Based Treasury System with Reward-Per-Share Model",
+        "",
+        "Efficient reward distribution using accumulator pattern:",
+        "- reward_per_share: Accumulator that increases when fees are credited",
+        "- Each backer tracks reward_debt = deposited_amount * reward_per_share at deposit time",
+        "- Claimable = (deposited_amount * reward_per_share - reward_debt) / PRECISION"
+      ],
       "type": {
         "kind": "struct",
         "fields": [
           {
-            "name": "totalStaked",
+            "name": "rewardPerShare",
+            "type": "u128"
+          },
+          {
+            "name": "totalDeposited",
             "type": "u64"
           },
           {
+            "name": "liquidBalance",
+            "type": "u64"
+          },
+          {
+            "name": "rewardPoolBalance",
+            "type": "u64"
+          },
+          {
+            "name": "platformPoolBalance",
+            "type": "u64"
+          },
+          {
+            "name": "rewardFeeBps",
+            "type": "u64"
+          },
+          {
+            "name": "platformFeeBps",
+            "type": "u64"
+          },
+          {
+            "name": "admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "devWallet",
+            "type": "pubkey"
+          },
+          {
+            "name": "emergencyPause",
+            "type": "bool"
+          },
+          {
+            "name": "rewardPoolBump",
+            "type": "u8"
+          },
+          {
+            "name": "platformPoolBump",
+            "type": "u8"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "backerTotalStaked",
+            "type": "u128"
+          },
+          {
+            "name": "backerStakePoolBump",
+            "type": "u8"
+          },
+          {
             "name": "totalRewardsDistributed",
+            "type": "u128"
+          },
+          {
+            "name": "adminPoolBalance",
+            "type": "u128"
+          },
+          {
+            "name": "adminPoolBump",
+            "type": "u8"
+          },
+          {
+            "name": "currentApyBps",
+            "type": "u64"
+          },
+          {
+            "name": "lastApyUpdateTs",
+            "type": "i64"
+          },
+          {
+            "name": "lastDistributionTime",
+            "type": "i64"
+          },
+          {
+            "name": "totalStaked",
             "type": "u64"
           },
           {
@@ -2356,24 +3537,8 @@ export type D2dProgramSol = {
             "type": "u64"
           },
           {
-            "name": "lastDistributionTime",
-            "type": "i64"
-          },
-          {
-            "name": "emergencyPause",
-            "type": "bool"
-          },
-          {
-            "name": "admin",
-            "type": "pubkey"
-          },
-          {
             "name": "treasuryWallet",
             "type": "pubkey"
-          },
-          {
-            "name": "bump",
-            "type": "u8"
           }
         ]
       }
@@ -2406,6 +3571,35 @@ export type D2dProgramSol = {
           {
             "name": "bump",
             "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "withdrawRequested",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "backer",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "requestId",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "requestedAt",
+            "type": "i64"
           }
         ]
       }

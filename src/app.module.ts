@@ -7,6 +7,7 @@ import { ProgramModule } from './program/program.module';
 import { TransactionModule } from './transaction/transaction.module';
 import { CryptoModule } from './crypto/crypto.module';
 import { SupabaseModule } from './supabase/supabase.module';
+import { PoolModule } from './pool/pool.module';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { SupabaseModule } from './supabase/supabase.module';
     ProgramModule,
     TransactionModule,
     CryptoModule,
+    PoolModule,
   ],
 })
 export class AppModule {}

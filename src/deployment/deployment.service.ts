@@ -261,9 +261,9 @@ export class DeploymentService {
     try {
       // Step 1: Verify payment transaction
       this.logger.log('Step 1: Verifying payment transaction...');
-      // Payment goes to Treasury Pool PDA (program-owned account)
-      const [treasuryPoolPDA] = this.programService.getTreasuryPoolPDA();
-      const treasuryPoolAddress = treasuryPoolPDA.toString();
+      // Payment goes to Reward Pool PDA (receives developer fees)
+      const [rewardPoolPDA] = this.programService.getRewardPoolPDA();
+      const rewardPoolAddress = rewardPoolPDA.toString();
       const totalPayment =
         dto.serviceFee +
         dto.deploymentPlatformFee +
@@ -281,12 +281,12 @@ export class DeploymentService {
         // Verify payment on current network (devnet or mainnet based on SOLANA_ENV)
         this.logger.log('   Payment signature:', dto.paymentSignature);
         this.logger.log('   Verifying on network...');
-        this.logger.log('   Expected recipient: Treasury Pool PDA', treasuryPoolAddress);
+        this.logger.log('   Expected recipient: Reward Pool PDA', rewardPoolAddress);
 
       const verification = await this.transactionService.verifyTransaction(
         dto.paymentSignature,
         dto.userWalletAddress,
-        treasuryPoolAddress, // Payment goes to Treasury Pool PDA
+        rewardPoolAddress, // Payment goes to Reward Pool PDA (receives developer fees)
         totalPayment,
       );
 
@@ -294,7 +294,7 @@ export class DeploymentService {
           this.logger.error('❌ Payment verification failed');
           this.logger.error('   Error:', verification.error);
           this.logger.error('   Expected from:', dto.userWalletAddress);
-          this.logger.error('   Expected to: Treasury Pool PDA', treasuryPoolAddress);
+          this.logger.error('   Expected to: Reward Pool PDA', rewardPoolAddress);
           this.logger.error('   Expected amount:', totalPayment, 'lamports');
         throw new BadRequestException(`Payment verification failed: ${verification.error}`);
       }
@@ -362,9 +362,10 @@ export class DeploymentService {
       }
 
       try {
-        // Request funds from D2D treasury pool
-        // This will transfer deployment_cost from treasury → ephemeral_key
-        const fundsTx = await this.programService.requestDeploymentFunds(
+        // Create deploy request after payment verification (admin-only)
+        // Payment has already been verified and transferred to treasury pool
+        // This creates the deploy_request and updates user stats
+        const fundsTx = await this.programService.createDeployRequest(
           programHashBuffer,
           dto.serviceFee,
           dto.monthlyFee,
@@ -414,14 +415,27 @@ export class DeploymentService {
       this.logger.log('🚀 Step 4: Starting background deployment process...');
       this.logger.log('   Using pure Web3.js (BPFLoaderUpgradeable)');
       this.logger.log('   No Solana CLI required ✅');
+      this.logger.log(`   Deployment ID: ${deployment.id}`);
+      this.logger.log(`   This will:`);
+      this.logger.log(`   1. Generate temporary wallet`);
+      this.logger.log(`   2. Fund temporary wallet from Treasury Pool (SOL will be deducted here)`);
+      this.logger.log(`   3. Deploy program to devnet`);
+      this.logger.log(`   4. Transfer authority`);
+      this.logger.log(`   5. Confirm deployment`);
       
+      // Start background process and log errors
       this.processDeployment(
         deployment.id,
         programHashBuffer,
         developerPubkey,
-      ).catch((error) => {
-        this.logger.error(`Background deployment failed: ${error.message}`);
-      });
+      )
+        .then(() => {
+          this.logger.log(`[${deployment.id}] ✅ Background deployment process completed successfully`);
+        })
+        .catch((error) => {
+          this.logger.error(`[${deployment.id}] ❌ Background deployment failed: ${error.message}`);
+          this.logger.error(`[${deployment.id}] Stack: ${error.stack}`);
+        });
 
       return {
         deploymentId: deployment.id,
@@ -528,19 +542,34 @@ export class DeploymentService {
       });
 
       // Call on-chain instruction to transfer SOL from Treasury Pool to temporary wallet
+      this.logger.log(`   📊 Treasury Pool balance BEFORE funding: Checking...`);
+      const treasuryBefore = await this.programService.getTreasuryPoolState();
+      if (treasuryBefore) {
+        this.logger.log(`   📊 Treasury Pool total_staked BEFORE: ${treasuryBefore.totalStaked} lamports (${treasuryBefore.totalStaked / 1e9} SOL)`);
+      }
+      
+      this.logger.log(`   💸 Transferring ${deployment.deployment_cost} lamports (${deployment.deployment_cost / 1e9} SOL) from Treasury Pool to temporary wallet...`);
+      
       await this.programService.fundTemporaryWallet(
         programHash,
         temporaryWallet.publicKey,
         deployment.deployment_cost,
       );
 
+      this.logger.log(`   📊 Treasury Pool balance AFTER funding: Checking...`);
+      const treasuryAfter = await this.programService.getTreasuryPoolState();
+      if (treasuryAfter) {
+        this.logger.log(`   📊 Treasury Pool total_staked AFTER: ${treasuryAfter.totalStaked} lamports (${treasuryAfter.totalStaked / 1e9} SOL)`);
+        const deducted = (treasuryBefore?.totalStaked || 0) - treasuryAfter.totalStaked;
+        this.logger.log(`   ✅ SOL deducted from Treasury Pool: ${deducted} lamports (${deducted / 1e9} SOL)`);
+      }
+
       this.logger.log(`✅ Temporary wallet funded successfully`);
 
       // ========================================================================
       // Step 3: Deploy program using Solana CLI with temporary wallet
       // ========================================================================
-      const config = this.configService.getConfig();
-      const targetNetwork = config.environment === 'devnet' ? 'Devnet' : 'Mainnet';
+      const targetNetwork = 'Devnet'; // Always devnet for testing
       
       this.logger.log(`[${deploymentId}] Step 3: Deploying to ${targetNetwork}...`);
       await this.supabaseService.updateDeploymentStatus(deploymentId, DeploymentStatus.DEPLOYING);
@@ -577,7 +606,8 @@ export class DeploymentService {
       });
 
       // Use pure Web3.js authority transfer
-      const connection = config.environment === 'devnet' 
+      const authConfig = this.configService.getConfig();
+      const connection = authConfig.environment === 'devnet' 
         ? this.devnetConnection 
         : this.mainnetConnection;
       
@@ -709,9 +739,10 @@ export class DeploymentService {
       this.logger.log(`✅ Deployment confirmed on-chain: ${confirmTx}`);
 
       // Step 5: Update Supabase with success
+      const deploymentConfig = this.configService.getConfig();
       await this.supabaseService.updateDeployment(deploymentId, {
         status: DeploymentStatus.SUCCESS,
-        mainnet_program_id: programId,
+        devnet_program_id: programId, // Changed from mainnet_program_id to devnet_program_id
         transaction_signature: signature,
         on_chain_confirm_tx: confirmTx,
       });
@@ -720,9 +751,10 @@ export class DeploymentService {
         deployment_id: deploymentId,
         phase: 'confirm',
         log_level: 'info',
-        message: 'Deployment completed successfully',
+        message: `Deployment completed successfully on ${deploymentConfig.environment}`,
         metadata: {
-          mainnet_program_id: programId,
+          program_id: programId,
+          environment: deploymentConfig.environment,
           transaction_signature: signature,
           confirm_tx: confirmTx,
         },
@@ -739,6 +771,10 @@ export class DeploymentService {
       this.cleanupTempFile(programFilePath);
 
       this.logger.log(`[${deploymentId}] ✅ DEPLOYMENT COMPLETED SUCCESSFULLY`);
+      this.logger.log(`   Program ID: ${programId}`);
+      this.logger.log(`   Environment: ${deploymentConfig.environment}`);
+      this.logger.log(`   Deploy TX: ${signature}`);
+      this.logger.log(`   Confirm TX: ${confirmTx}`);
     } catch (error) {
       this.logger.error(`[${deploymentId}] Deployment process failed: ${error.message}`);
       
@@ -1069,7 +1105,45 @@ export class DeploymentService {
     context: string,
     options: { timeoutMs?: number } = {},
   ): Promise<{ stdout: string; stderr: string }> {
-    const cliPath = process.env.SOLANA_CLI_PATH || 'solana';
+    // Try to find Solana CLI path
+    let cliPath = process.env.SOLANA_CLI_PATH;
+    
+    if (!cliPath) {
+      // Try to find which solana
+      try {
+        const { stdout } = await execAsync('which solana', { timeout: 5000 });
+        if (stdout.trim()) {
+          cliPath = stdout.trim();
+          this.logger.log(`   Found Solana CLI via 'which': ${cliPath}`);
+        }
+      } catch (e) {
+        // which failed, try common paths
+        const commonPaths = [
+          process.env.HOME + '/.local/share/solana/install/active_release/bin/solana',
+          '/root/.local/share/solana/install/active_release/bin/solana',
+          '/usr/local/bin/solana',
+          '/usr/bin/solana',
+        ];
+        
+        for (const path of commonPaths) {
+          try {
+            await execAsync(`test -x "${path}"`, { timeout: 1000 });
+            cliPath = path;
+            this.logger.log(`   Found Solana CLI at: ${cliPath}`);
+            break;
+          } catch (e) {
+            // Path doesn't exist, try next
+          }
+        }
+      }
+      
+      // Default to 'solana' if nothing found (will fail with better error)
+      if (!cliPath) {
+        cliPath = 'solana';
+        this.logger.warn(`   ⚠️  Solana CLI not found, using 'solana' (must be in PATH or set SOLANA_CLI_PATH)`);
+      }
+    }
+    
     this.logger.log(`🔧 Running Solana CLI (${context}): ${cliPath} ${args.join(' ')}`);
 
     const timeoutMs = options.timeoutMs ?? this.getCliTimeoutMs();
