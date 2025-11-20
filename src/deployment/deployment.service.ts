@@ -750,13 +750,31 @@ export class DeploymentService {
 
       this.logger.log(`✅ Deployment confirmed on-chain: ${confirmTx}`);
 
+      // Fetch subscription expiration from on-chain DeployRequest
+      let subscriptionExpiresAt: Date | null = null;
+      try {
+        const programHashBuffer = Buffer.from(deployment.program_hash || '', 'hex');
+        if (programHashBuffer.length === 32) {
+          const deployRequestState = await this.programService.getDeployRequestState(programHashBuffer);
+          if (deployRequestState && deployRequestState.subscriptionPaidUntil) {
+            const timestamp = deployRequestState.subscriptionPaidUntil.toNumber();
+            subscriptionExpiresAt = new Date(timestamp * 1000);
+            this.logger.log(`   Subscription expires at: ${subscriptionExpiresAt.toISOString()}`);
+          }
+        }
+      } catch (error) {
+        this.logger.warn(`Failed to fetch subscription expiration: ${error instanceof Error ? error.message : error}`);
+      }
+
       // Step 5: Update Supabase with success
       const deploymentConfig = this.configService.getConfig();
       await this.supabaseService.updateDeployment(deploymentId, {
         status: DeploymentStatus.SUCCESS,
-        devnet_program_id: programId, // Changed from mainnet_program_id to devnet_program_id
+        devnet_program_id: programId, // Deployed program ID
+        deployer_wallet_address: temporaryWallet ? temporaryWallet.publicKey.toString() : undefined, // Temporary wallet used for deployment
         transaction_signature: signature,
         on_chain_confirm_tx: confirmTx,
+        subscription_expires_at: subscriptionExpiresAt ? subscriptionExpiresAt.toISOString() : undefined,
       });
 
       await this.supabaseService.addDeploymentLog({

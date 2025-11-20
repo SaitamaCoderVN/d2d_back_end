@@ -27,6 +27,7 @@ export interface Deployment {
   service_fee: number;
   deployment_platform_fee: number;
   deployment_cost: number;
+  subscription_expires_at?: string; // ISO timestamp when subscription expires
   created_at: string;
   updated_at: string;
 }
