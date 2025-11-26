@@ -294,34 +294,88 @@ export class TransactionService {
 
       const transfers = this.extractAllTransferDetails(transaction);
 
-      if (transfers.length < expectedTransfers.length) {
-        return {
-          isValid: false,
-          error: `Expected ${expectedTransfers.length} transfers, found ${transfers.length}`,
-        };
+      // Log all found transfers for debugging
+      this.logger.log(`   Found ${transfers.length} transfer(s) in transaction:`);
+      transfers.forEach((t, i) => {
+        this.logger.log(`     [${i + 1}] From: ${t.from.slice(0, 8)}...${t.from.slice(-8)} → To: ${t.to} (${t.amount / 1e9} SOL)`);
+      });
+
+      // Filter out transfers with 0 amount (they might be filtered out or not sent)
+      const nonZeroExpectedTransfers = expectedTransfers.filter(t => t.amount > 0);
+      
+      if (transfers.length < nonZeroExpectedTransfers.length) {
+        this.logger.warn(`   Expected ${nonZeroExpectedTransfers.length} non-zero transfers, found ${transfers.length}`);
+        this.logger.warn(`   Expected transfers:`);
+        nonZeroExpectedTransfers.forEach((t, i) => {
+          this.logger.warn(`     [${i + 1}] To: ${t.to} (${t.amount / 1e9} SOL)`);
+        });
+        
+        // If we have fewer transfers than expected, check if amounts match when combined
+        const totalExpected = nonZeroExpectedTransfers.reduce((sum, t) => sum + t.amount, 0);
+        const totalFound = transfers
+          .filter(t => t.from === expectedFrom)
+          .reduce((sum, t) => sum + t.amount, 0);
+        
+        const totalDifference = Math.abs(totalFound - totalExpected);
+        const tolerance = 0.001 * LAMPORTS_PER_SOL;
+        
+        if (totalDifference <= tolerance) {
+          this.logger.log(`   ✅ Total amount matches (${totalFound / 1e9} SOL), allowing combined transfer`);
+          // Allow if total matches (user might have sent combined payment)
+        } else {
+          return {
+            isValid: false,
+            error: `Expected ${nonZeroExpectedTransfers.length} transfers, found ${transfers.length}. Total amount mismatch: Expected ${totalExpected / 1e9} SOL, Got ${totalFound / 1e9} SOL`,
+          };
+        }
       }
 
-      // Verify each expected transfer
-      for (const expected of expectedTransfers) {
+      // Verify each expected transfer (only non-zero amounts)
+      for (const expected of nonZeroExpectedTransfers) {
         const found = transfers.find(
           t => t.from === expectedFrom && t.to === expected.to
         );
 
         if (!found) {
-          return {
-            isValid: false,
-            error: `Transfer to ${expected.to} not found`,
-          };
-        }
+          // Check if this transfer might be combined with another
+          const totalToExpectedAddress = transfers
+            .filter(t => t.from === expectedFrom && t.to === expected.to)
+            .reduce((sum, t) => sum + t.amount, 0);
+          
+          if (totalToExpectedAddress === 0) {
+            // Check if amount is 0 (should be skipped)
+            if (expected.amount === 0) {
+              this.logger.log(`   Skipping zero-amount transfer to ${expected.to}`);
+              continue;
+            }
+            
+            return {
+              isValid: false,
+              error: `Transfer to ${expected.to} not found. Expected: ${expected.amount / 1e9} SOL`,
+            };
+          }
+          
+          // If we found transfers to this address but amount doesn't match exactly,
+          // check if it's close enough
+          const amountDifference = Math.abs(totalToExpectedAddress - expected.amount);
+          const tolerance = 0.001 * LAMPORTS_PER_SOL;
+          
+          if (amountDifference > tolerance) {
+            return {
+              isValid: false,
+              error: `Amount mismatch for ${expected.to}. Expected: ${expected.amount / 1e9} SOL, Got: ${totalToExpectedAddress / 1e9} SOL`,
+            };
+          }
+        } else {
+          const amountDifference = Math.abs(found.amount - expected.amount);
+          const tolerance = 0.001 * LAMPORTS_PER_SOL;
 
-        const amountDifference = Math.abs(found.amount - expected.amount);
-        const tolerance = 0.001 * LAMPORTS_PER_SOL;
-
-        if (amountDifference > tolerance) {
-          return {
-            isValid: false,
-            error: `Amount mismatch for ${expected.to}. Expected: ${expected.amount}, Got: ${found.amount}`,
-          };
+          if (amountDifference > tolerance) {
+            return {
+              isValid: false,
+              error: `Amount mismatch for ${expected.to}. Expected: ${expected.amount / 1e9} SOL, Got: ${found.amount / 1e9} SOL`,
+            };
+          }
         }
       }
 

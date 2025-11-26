@@ -275,6 +275,14 @@ export class DeploymentService {
       const platformPoolAmount = dto.deploymentPlatformFee; // Platform fee → PlatformPool
       const totalPayment = rewardPoolAmount + platformPoolAmount;
 
+      // Log fee breakdown
+      this.logger.log(`   Fee breakdown:`);
+      this.logger.log(`     - Monthly fee: ${monthlyFeeAmount / 1e9} SOL (${monthlyFeeAmount} lamports)`);
+      this.logger.log(`     - Service fee: ${dto.serviceFee / 1e9} SOL (${dto.serviceFee} lamports)`);
+      this.logger.log(`     - Platform fee: ${platformPoolAmount / 1e9} SOL (${platformPoolAmount} lamports)`);
+      this.logger.log(`     - Reward Pool total: ${rewardPoolAmount / 1e9} SOL (${rewardPoolAmount} lamports)`);
+      this.logger.log(`     - Total payment: ${totalPayment / 1e9} SOL (${totalPayment} lamports)`);
+
       // Check if this is a simulated transaction (for testing)
       const isSimulated = dto.paymentSignature.startsWith('SIMULATED_');
       
@@ -291,14 +299,22 @@ export class DeploymentService {
         this.logger.log(`     - Reward Pool: ${rewardPoolAmount} lamports (${rewardPoolAmount / 1e9} SOL)`);
         this.logger.log(`     - Platform Pool: ${platformPoolAmount} lamports (${platformPoolAmount / 1e9} SOL)`);
 
+        // Build expected transfers list (only include non-zero amounts)
+        const expectedTransfers: Array<{ to: string; amount: number }> = [];
+        if (rewardPoolAmount > 0) {
+          expectedTransfers.push({ to: rewardPoolAddress, amount: rewardPoolAmount });
+        }
+        if (platformPoolAmount > 0) {
+          expectedTransfers.push({ to: platformPoolAddress, amount: platformPoolAmount });
+        }
+
+        this.logger.log(`   Expected ${expectedTransfers.length} transfer(s) (non-zero amounts only)`);
+
         // Verify multiple transfers in one transaction
         const verification = await this.transactionService.verifyMultipleTransfers(
           dto.paymentSignature,
           dto.userWalletAddress,
-          [
-            { to: rewardPoolAddress, amount: rewardPoolAmount },
-            { to: platformPoolAddress, amount: platformPoolAmount },
-          ],
+          expectedTransfers,
         );
 
         if (!verification.isValid) {
