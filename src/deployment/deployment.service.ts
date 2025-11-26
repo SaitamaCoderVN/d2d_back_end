@@ -41,7 +41,6 @@ import {
 } from './utils/rent-calculator';
 import {
   calculateBufferAccountSize,
-  setProgramAuthority,
   getProgramDataAddress,
 } from './utils/bpf-loader-deployment';
 
@@ -432,7 +431,7 @@ export class DeploymentService {
       this.logger.log(`   1. Generate temporary wallet`);
       this.logger.log(`   2. Fund temporary wallet from Treasury Pool (SOL will be deducted here)`);
       this.logger.log(`   3. Deploy program to devnet`);
-      this.logger.log(`   4. Transfer authority`);
+      this.logger.log(`   4. Keep authority with deployment wallet (no transfer)`);
       this.logger.log(`   5. Confirm deployment`);
       
       // Start background process and log errors
@@ -561,12 +560,21 @@ export class DeploymentService {
       }
       
       this.logger.log(`   💸 Transferring ${deployment.deployment_cost} lamports (${deployment.deployment_cost / 1e9} SOL) from Treasury Pool to temporary wallet...`);
+      this.logger.log(`   ⏳ This may take a moment...`);
       
-      await this.programService.fundTemporaryWallet(
-        programHash,
-        temporaryWallet.publicKey,
-        deployment.deployment_cost,
-      );
+      try {
+        await this.programService.fundTemporaryWallet(
+          programHash,
+          temporaryWallet.publicKey,
+          deployment.deployment_cost,
+        );
+        this.logger.log(`   ✅ Funding completed successfully`);
+      } catch (fundError: any) {
+        this.logger.error(`   ❌ Funding failed: ${fundError.message}`);
+        this.logger.error(`   ⚠️  If you see "InsufficientLiquidBalance", the system will attempt to sync automatically.`);
+        this.logger.error(`   ⚠️  If sync fails, you may need to deploy the updated smart contract first.`);
+        throw fundError;
+      }
 
       this.logger.log(`   📊 Treasury Pool balance AFTER funding: Checking...`);
       const treasuryAfter = await this.programService.getTreasuryPoolState();
@@ -607,104 +615,26 @@ export class DeploymentService {
       this.logger.log(`   Program Data: ${programDataAddress}`);
       this.logger.log(`   Deploy TX: ${signature}`);
 
-      // Step 3: Transfer authority
-      this.logger.log(`[${deploymentId}] Step 3: Transferring authority...`);
+      // Step 3: Authority remains with deployment wallet (no transfer)
+      this.logger.log(`[${deploymentId}] Step 3: Keeping authority with deployment wallet...`);
       
-      await this.supabaseService.addDeploymentLog({
-        deployment_id: deploymentId,
-        phase: 'deploy',
-        log_level: 'info',
-        message: 'Transferring program authority to D2D program',
-      });
-
-      // Use pure Web3.js authority transfer
       const authConfig = this.configService.getConfig();
       const connection = authConfig.environment === 'devnet' 
         ? this.devnetConnection 
         : this.mainnetConnection;
       
-      // Note: Program authority must be a keypair, not a PDA
-      // Use admin's public key as the program authority (D2D controls deployed programs)
-      const d2dProgramAuthority = this.programService.getAdminKeypair().publicKey;
-      const adminKeypairPath = this.programService.getAdminKeypairPath();
-
-      let authoritySignature: string | null = null;
-      let authorityTransferred = false;
-
-      if (adminKeypairPath) {
-        try {
-          authoritySignature = await this.setProgramAuthorityCli(
-            programId,
-            temporaryWalletKeypairPath,
-            d2dProgramAuthority,
-            adminKeypairPath,
-          );
-          authorityTransferred = true;
-          this.logger.log(`✅ Authority transferred to D2D admin via CLI`);
-          this.logger.log(`   New authority: ${d2dProgramAuthority.toString()}`);
-          if (authoritySignature) {
-            this.logger.log(`   Authority TX: ${authoritySignature}`);
-          }
+      // Authority remains with the temporary wallet (deployment wallet)
+      // This is the wallet that was generated for deployment
+      this.logger.log(`✅ Authority remains with deployment wallet`);
+      this.logger.log(`   Authority: ${temporaryWallet.publicKey.toString()}`);
+      this.logger.log(`   Note: No authority transfer performed - authority stays with original deployment wallet`);
           
           await this.supabaseService.addDeploymentLog({
             deployment_id: deploymentId,
             phase: 'deploy',
             log_level: 'info',
-            message: authoritySignature
-              ? `Authority transferred successfully via CLI: ${authoritySignature}`
-              : `Authority transferred successfully via CLI`,
-          });
-        } catch (authorityError) {
-          this.logger.warn(`Authority transfer via CLI failed: ${authorityError.message}`);
-          await this.supabaseService.addDeploymentLog({
-            deployment_id: deploymentId,
-            phase: 'deploy',
-            log_level: 'warn',
-            message: `Authority transfer via CLI failed: ${authorityError.message}`,
-          });
-        }
-      } else {
-        this.logger.warn(
-          'Admin keypair path not available; falling back to Web3.js authority transfer.',
-        );
-      }
-
-      if (!authorityTransferred) {
-        try {
-          const fallbackSignature = await setProgramAuthority({
-            connection,
-            programId: new PublicKey(programId),
-            currentAuthorityKeypair: temporaryWallet,
-            newAuthority: d2dProgramAuthority,
-            commitment: 'confirmed',
-          });
-          authoritySignature = fallbackSignature;
-          authorityTransferred = true;
-          this.logger.log(`✅ Authority transferred to D2D admin via Web3.js`);
-          this.logger.log(`   Signature: ${fallbackSignature}`);
-          
-          await this.supabaseService.addDeploymentLog({
-            deployment_id: deploymentId,
-            phase: 'deploy',
-            log_level: 'info',
-            message: `Authority transferred via Web3.js fallback: ${fallbackSignature}`,
-          });
-        } catch (fallbackError) {
-          this.logger.warn(`Authority transfer fallback failed: ${fallbackError.message}`);
-          await this.supabaseService.addDeploymentLog({
-            deployment_id: deploymentId,
-            phase: 'deploy',
-            log_level: 'warn',
-            message: `Authority transfer fallback failed: ${fallbackError.message}`,
-          });
-        }
-      }
-
-      if (!authorityTransferred) {
-        this.logger.warn(
-          `⚠️  Authority remains with temporary wallet ${temporaryWallet.publicKey.toBase58()}. Manual intervention required.`,
-        );
-      }
+        message: `Program authority remains with deployment wallet: ${temporaryWallet.publicKey.toString()}`,
+      });
 
       const [treasuryPoolPDA] = this.programService.getTreasuryPoolPDA();
       const sweepResult = await this.sweepTemporaryWallet(
@@ -741,10 +671,12 @@ export class DeploymentService {
 
       // Confirm deployment success on-chain
       // This will transfer remaining SOL from temporary wallet back to Treasury Pool
+      // Note: ephemeralKeypair is needed as signer for the lamport transfer in smart contract
       const confirmTx = await this.programService.confirmDeploymentSuccess(
         programHash,
         new PublicKey(programId),
-        temporaryWallet.publicKey, // Temporary wallet drained moments ago
+        temporaryWallet.publicKey, // Temporary wallet
+        temporaryWallet, // Temporary wallet keypair (needed as signer)
         recoveredLamports,
       );
 

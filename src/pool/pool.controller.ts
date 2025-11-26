@@ -1,6 +1,7 @@
 import { Controller, Post, Get, Body, UseGuards, HttpCode, HttpStatus } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { PoolService } from './pool.service';
+import { ProgramService } from '../program/program.service';
 import { AdminGuard } from '../common/guards/admin.guard';
 
 export class CreditFeeDto {
@@ -10,16 +11,21 @@ export class CreditFeeDto {
 
 export class PoolStateResponseDto {
   rewardPerShare: string; // BigInt as string
-  totalDeposited: number;
-  liquidBalance: number;
-  rewardPoolBalance: number;
-  platformPoolBalance: number;
+  totalDeposited: number; // Total SOL deposited (lamports)
+  liquidBalance: number; // Available SOL for deployment (lamports) - THIS IS "Available for Deploy"
+  rewardPoolBalance: number; // Reward pool balance (lamports)
+  platformPoolBalance: number; // Platform pool balance (lamports)
+  treasuryPoolPDA: string; // Treasury Pool PDA address
+  availableForDeploySOL: number; // Available SOL for deployment (in SOL, not lamports)
 }
 
 @ApiTags('pool')
-@Controller('api/pool')
+@Controller('pool')
 export class PoolController {
-  constructor(private readonly poolService: PoolService) {}
+  constructor(
+    private readonly poolService: PoolService,
+    private readonly programService: ProgramService,
+  ) {}
 
   /**
    * Credit fees to pools and update reward_per_share
@@ -56,6 +62,42 @@ export class PoolController {
   @ApiResponse({ status: 200, description: 'Pool state synced' })
   async syncPoolState(): Promise<{ success: boolean }> {
     return await this.poolService.syncPoolStateFromChain();
+  }
+
+  /**
+   * Sync liquid_balance with actual account balance
+   * Admin-only endpoint to fix liquid_balance when it's out of sync
+   */
+  @Post('sync-liquid-balance')
+  @UseGuards(AdminGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Sync liquid_balance with account balance (admin only)' })
+  @ApiResponse({ status: 200, description: 'liquid_balance synced successfully' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @HttpCode(HttpStatus.OK)
+  async syncLiquidBalance(): Promise<{ success: boolean; txSignature: string }> {
+    const txSignature = await this.programService.syncLiquidBalance();
+    return { success: true, txSignature };
+  }
+
+  /**
+   * Get leaderboard of all backers sorted by claimable rewards
+   */
+  @Get('leaderboard')
+  @ApiOperation({ summary: 'Get leaderboard of backers sorted by claimable rewards' })
+  @ApiResponse({ status: 200, description: 'Leaderboard data' })
+  async getLeaderboard(): Promise<{
+    leaderboard: Array<{
+      wallet: string;
+      depositedAmount: number; // lamports
+      claimableRewards: number; // lamports
+      claimedTotal: number; // lamports
+      isActive: boolean;
+    }>;
+    rewardPoolBalance: number; // lamports - Total SOL in reward pool
+    rewardPoolAddress: string; // Reward pool PDA address
+  }> {
+    return await this.poolService.getLeaderboard();
   }
 }
 

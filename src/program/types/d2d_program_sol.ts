@@ -463,7 +463,8 @@ export type D2dProgramSol = {
         },
         {
           "name": "ephemeralKey",
-          "writable": true
+          "writable": true,
+          "signer": true
         },
         {
           "name": "developerWallet",
@@ -625,7 +626,8 @@ export type D2dProgramSol = {
         },
         {
           "name": "ephemeralKey",
-          "writable": true
+          "writable": true,
+          "signer": true
         },
         {
           "name": "developerWallet",
@@ -2011,6 +2013,81 @@ export type D2dProgramSol = {
         {
           "name": "admin",
           "writable": true,
+          "signer": true
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "syncLiquidBalance",
+      "docs": [
+        "Admin sync liquid_balance with actual account balance",
+        "This fixes liquid_balance when it's out of sync with account balance"
+      ],
+      "discriminator": [
+        31,
+        190,
+        73,
+        167,
+        101,
+        188,
+        141,
+        57
+      ],
+      "accounts": [
+        {
+          "name": "treasuryPool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  101,
+                  97,
+                  115,
+                  117,
+                  114,
+                  121,
+                  95,
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "treasuryPda",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  101,
+                  97,
+                  115,
+                  117,
+                  114,
+                  121,
+                  95,
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
           "signer": true
         }
       ],

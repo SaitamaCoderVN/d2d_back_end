@@ -7,6 +7,7 @@ export enum DeploymentStatus {
   DEPLOYING = 'deploying',
   SUCCESS = 'success',
   FAILED = 'failed',
+  CLOSED = 'closed',
 }
 
 export interface Deployment {

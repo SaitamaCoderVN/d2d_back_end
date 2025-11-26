@@ -1194,6 +1194,77 @@ export class ProgramService implements OnModuleInit {
         
         return tx;
       } catch (innerError: any) {
+        // Check if error is InsufficientLiquidBalance
+        const isInsufficientLiquidBalance = 
+          innerError.message?.includes('InsufficientLiquidBalance') ||
+          innerError.message?.includes('Insufficient liquid balance') ||
+          innerError.error?.errorCode?.code === 'InsufficientLiquidBalance' ||
+          innerError.error?.errorCode?.code === 6026;
+
+        if (isInsufficientLiquidBalance) {
+          this.logger.warn('⚠️  InsufficientLiquidBalance detected - attempting to sync liquid_balance...');
+          this.logger.warn('   This may take a moment if sync_liquid_balance instruction is not deployed...');
+          
+          try {
+            // Add timeout for sync operation (30 seconds)
+            const syncPromise = this.syncLiquidBalance();
+            const timeoutPromise = new Promise((_, reject) => {
+              setTimeout(() => {
+                reject(new Error('syncLiquidBalance timeout after 30 seconds'));
+              }, 30000);
+            });
+            
+            // Try to sync liquid_balance with timeout
+            await Promise.race([syncPromise, timeoutPromise]);
+            
+            this.logger.log('✅ liquid_balance synced successfully. Retrying fund_temporary_wallet...');
+            
+            // Retry funding after sync
+            const retryTx = await this.program.methods
+              .fundTemporaryWallet(
+                requestIdArray,
+                deploymentCostU64,
+                useAdminPool
+              )
+              .accountsPartial({
+                treasuryPool: treasuryPoolPDA,
+                deployRequest: deployRequestPDA,
+                admin: this.adminKeypair.publicKey,
+                treasuryPda: treasuryPoolPDA,
+                temporaryWallet: temporaryWalletPubkey,
+              } as any)
+              .signers([this.adminKeypair])
+              .rpc();
+            
+            this.logger.log('');
+            this.logger.log('✅ Temporary wallet funded successfully after sync!');
+            this.logger.log(`   Transaction: ${retryTx}`);
+            this.logger.log(`   Temporary wallet received: ${deploymentCost / 1e9} SOL`);
+            this.logger.log(`   Explorer: https://explorer.solana.com/tx/${retryTx}?cluster=${process.env.SOLANA_ENV || 'devnet'}`);
+            this.logger.log('═══════════════════════════════════════════════');
+            
+            return retryTx;
+          } catch (syncError: any) {
+            this.logger.error('❌ Failed to sync liquid_balance');
+            this.logger.error(`   Sync Error: ${syncError.message}`);
+            
+            if (syncError.message?.includes('timeout')) {
+              this.logger.error('   ⚠️  sync_liquid_balance instruction timed out or not found in deployed program.');
+              this.logger.error('   💡 Please build and deploy the updated smart contract first:');
+              this.logger.error('      cd d2d-program-sol && anchor build && anchor deploy');
+              this.logger.error('   💡 Or manually sync liquid_balance using the API:');
+              this.logger.error('      POST /api/pool/sync-liquid-balance');
+            } else if (syncError.message?.includes('sync_liquid_balance') || syncError.message?.includes('not found')) {
+              this.logger.error('   ⚠️  sync_liquid_balance instruction not found in deployed program.');
+              this.logger.error('   💡 Please build and deploy the updated smart contract first:');
+              this.logger.error('      cd d2d-program-sol && anchor build && anchor deploy');
+            }
+            
+            // Don't throw immediately - provide helpful error message
+            throw new Error(`InsufficientLiquidBalance: liquid_balance is out of sync (${syncError.message}). Please sync it first by calling /api/pool/sync-liquid-balance or deploy the updated smart contract with sync_liquid_balance instruction. Original error: ${innerError.message}`);
+          }
+        }
+        
         this.logger.error('❌ Failed to fund temporary wallet (inner error)');
         this.logger.error(`   Error: ${innerError.message}`);
         if (innerError.logs) {
@@ -1223,11 +1294,13 @@ export class ProgramService implements OnModuleInit {
 
   /**
    * Confirm deployment success and return excess funds to treasury
+   * @param ephemeralKeypair - The keypair of the temporary wallet (needed as signer for lamport transfer)
    */
   async confirmDeploymentSuccess(
     programHash: Buffer,
     deployedProgramId: PublicKey,
     ephemeralKey: PublicKey,
+    ephemeralKeypair: Keypair, // Add keypair parameter
     recoveredFunds: number,
   ): Promise<string> {
 
@@ -1249,6 +1322,11 @@ export class ProgramService implements OnModuleInit {
       // Get Reward Pool PDA (for refunds on failure)
       const [rewardPoolPDA] = this.getRewardPoolPDA();
 
+      // Verify ephemeralKey matches the keypair
+      if (!ephemeralKey.equals(ephemeralKeypair.publicKey)) {
+        throw new Error(`Ephemeral key mismatch: expected ${ephemeralKey.toString()}, got ${ephemeralKeypair.publicKey.toString()}`);
+      }
+
       const tx = await (this.program.methods as any)
         .confirmDeploymentSuccess(
           Array.from(programHash),
@@ -1265,7 +1343,7 @@ export class ProgramService implements OnModuleInit {
           rewardPool: rewardPoolPDA,     // Reward Pool PDA (for refunds on failure)
           systemProgram: SystemProgram.programId,
         })
-        .signers([this.adminKeypair])
+        .signers([this.adminKeypair, ephemeralKeypair]) // Add ephemeralKeypair as signer
         .rpc();
 
       this.logger.log('');
@@ -1423,6 +1501,87 @@ export class ProgramService implements OnModuleInit {
       return tx;
     } catch (error) {
       this.logger.error(`Failed to credit fees: ${error.message}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Sync liquid_balance with actual account balance
+   * Admin-only instruction to fix liquid_balance when it's out of sync
+   */
+  async syncLiquidBalance(): Promise<string> {
+    try {
+      const [treasuryPoolPDA] = this.getTreasuryPoolPDA();
+
+      this.logger.log(`🔄 Syncing liquid_balance with account balance...`);
+      this.logger.log(`   Treasury Pool PDA: ${treasuryPoolPDA.toString()}`);
+
+      // Get current account balance before sync
+      const accountInfo = await this.connection.getAccountInfo(treasuryPoolPDA, 'confirmed');
+      if (!accountInfo) {
+        throw new Error('Treasury Pool account not found');
+      }
+      const accountBalanceBefore = accountInfo.lamports;
+      this.logger.log(`   Account balance before: ${accountBalanceBefore / 1e9} SOL (${accountBalanceBefore} lamports)`);
+
+      // Get current liquid_balance from struct
+      const treasuryPool = await this.program.account.treasuryPool.fetch(treasuryPoolPDA, 'confirmed');
+      const liquidBalanceBefore = treasuryPool.liquidBalance.toNumber();
+      this.logger.log(`   liquid_balance before: ${liquidBalanceBefore / 1e9} SOL (${liquidBalanceBefore} lamports)`);
+
+      this.logger.log(`   Attempting to call sync_liquid_balance instruction...`);
+      this.logger.log(`   ⚠️  If this hangs, the instruction may not be deployed yet.`);
+
+      // Add timeout for RPC call (20 seconds)
+      const rpcPromise = this.program.methods
+        .syncLiquidBalance()
+        .accountsPartial({
+          admin: this.adminKeypair.publicKey,
+        })
+        .signers([this.adminKeypair])
+        .rpc();
+
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => {
+          reject(new Error('syncLiquidBalance RPC call timed out after 20 seconds. The instruction may not be deployed in the smart contract.'));
+        }, 20000);
+      });
+
+      const tx = await Promise.race([rpcPromise, timeoutPromise]);
+
+      this.logger.log(`✅ Sync transaction sent: ${tx}`);
+      this.logger.log(`   Waiting for confirmation...`);
+
+      // Wait for confirmation with timeout
+      const confirmPromise = this.connection.confirmTransaction(tx, 'confirmed');
+      const confirmTimeout = new Promise<never>((_, reject) => {
+        setTimeout(() => {
+          reject(new Error('Transaction confirmation timed out after 30 seconds'));
+        }, 30000);
+      });
+
+      await Promise.race([confirmPromise, confirmTimeout]);
+
+      // Verify after sync
+      await new Promise(resolve => setTimeout(resolve, 2000)); // Wait for RPC cache
+      const treasuryPoolAfter = await this.program.account.treasuryPool.fetch(treasuryPoolPDA, 'confirmed');
+      const liquidBalanceAfter = treasuryPoolAfter.liquidBalance.toNumber();
+      
+      // Calculate rent exemption
+      const rentExemption = await this.connection.getMinimumBalanceForRentExemption(accountInfo.data.length);
+      const expectedLiquidBalance = accountBalanceBefore - rentExemption;
+
+      this.logger.log(`✅ Sync completed!`);
+      this.logger.log(`   liquid_balance after: ${liquidBalanceAfter / 1e9} SOL (${liquidBalanceAfter} lamports)`);
+      this.logger.log(`   Expected: ${expectedLiquidBalance / 1e9} SOL (${expectedLiquidBalance} lamports)`);
+      this.logger.log(`   Difference: ${Math.abs(liquidBalanceAfter - expectedLiquidBalance) / 1e9} SOL`);
+
+      return tx;
+    } catch (error: any) {
+      this.logger.error(`Failed to sync liquid_balance: ${error.message}`);
+      if (error.message?.includes('timeout') || error.message?.includes('not found')) {
+        throw new Error(`sync_liquid_balance instruction not available. Please deploy the updated smart contract first: cd d2d-program-sol && anchor build && anchor deploy. Error: ${error.message}`);
+      }
       throw error;
     }
   }
