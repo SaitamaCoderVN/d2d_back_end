@@ -18,10 +18,12 @@ import * as fs from 'fs';
 import * as path from 'path';
 import IDL from '../src/program/idl/d2d_program_sol.json';
 import { D2dProgramSol } from '../src/program/types/d2d_program_sol';
+import { getD2DProgramId, getTreasuryPoolPDA } from '../src/program/utils/pda.utils';
 
 // Configuration
 const RPC_URL = process.env.SOLANA_RPC_URL || 'https://api.devnet.solana.com';
-const PROGRAM_ID = new PublicKey('Hn6enqRbfjQywqVbkNNFe6rauWjQLvea8Fyh6fZZPpA8');
+// Get program ID from IDL (no hardcoding)
+const PROGRAM_ID = getD2DProgramId();
 const SUPABASE_URL = process.env.SUPABASE_URL || '';
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 
@@ -196,11 +198,8 @@ async function main() {
   }
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
   
-  // Derive Treasury Pool PDA
-  const [treasuryPoolPda] = PublicKey.findProgramAddressSync(
-    [Buffer.from('treasury_pool')],
-    PROGRAM_ID
-  );
+  // Derive Treasury Pool PDA (no hardcoding)
+  const [treasuryPoolPda] = getTreasuryPoolPDA();
   
   console.log(`📊 Fetching on-chain data from: ${treasuryPoolPda.toString()}`);
   

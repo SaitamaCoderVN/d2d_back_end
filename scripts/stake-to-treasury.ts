@@ -12,9 +12,12 @@ const IDL = JSON.parse(
   )
 );
 
+// Import utility functions
+import { getD2DProgramId, getTreasuryPoolPDA } from '../src/program/utils/pda.utils';
+
 async function main() {
-  // Read environment variables
-  const programIdStr = process.env.D2D_PROGRAM_ID || 'Hn6enqRbfjQywqVbkNNFe6rauWjQLvea8Fyh6fZZPpA8';
+  // Get program ID from IDL (no hardcoding, allow override via env)
+  const programIdStr = process.env.D2D_PROGRAM_ID || getD2DProgramId().toString();
   const adminWalletPath = process.env.ADMIN_WALLET_PATH || '/Users/saitamacoder/.config/solana/id.json';
   const rpcUrl = process.env.SOLANA_DEVNET_RPC || 'https://api.devnet.solana.com';
   const treasuryWalletStr = process.env.TREASURY_WALLET_ADDRESS || 'A1dVA8adW1XXgcVmLCtbrvbVEVA1n3Q7kNPaTZVonjpq';
@@ -36,11 +39,8 @@ async function main() {
   const program = new Program(IDL, provider);
   console.log('✅ Program ID:', programId.toBase58());
 
-  // Derive Treasury Pool PDA
-  const [treasuryPoolPDA] = PublicKey.findProgramAddressSync(
-    [Buffer.from('treasury_pool')],
-    programId
-  );
+  // Derive Treasury Pool PDA (no hardcoding)
+  const [treasuryPoolPDA] = getTreasuryPoolPDA();
   console.log('✅ Treasury Pool PDA:', treasuryPoolPDA.toBase58());
 
   // Check if Treasury Pool is initialized

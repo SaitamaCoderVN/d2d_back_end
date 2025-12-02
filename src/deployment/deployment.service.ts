@@ -202,7 +202,9 @@ export class DeploymentService {
       rentCost += rentBufferLamports;
       const serviceFee = calculateServiceFee(rentCost);
       const deploymentPlatformFee = calculateDeploymentPlatformFee(rentCost);
-      const monthlyFee = calculateMonthlyFee();
+      // Monthly fee = 1% of deployment cost (borrowed amount) per month
+      // This ensures backers receive 1-1.2% returns when their SOL is fully utilized
+      const monthlyFee = calculateMonthlyFee(rentCost);
       const initialMonths = 1;
       const totalPayment = calculateTotalPayment(
         serviceFee,
@@ -234,7 +236,7 @@ export class DeploymentService {
       this.logger.log(`   Rent (with buffer): ${lamportsToSOL(rentCost)} SOL`);
       this.logger.log(`   Service Fee (0.5%): ${lamportsToSOL(serviceFee)} SOL (${serviceFee} lamports)`);
       this.logger.log(`   Platform Deploy Fee (0.1%): ${lamportsToSOL(deploymentPlatformFee)} SOL (${deploymentPlatformFee} lamports)`);
-      this.logger.log(`   Monthly Fee: ${lamportsToSOL(monthlyFee)} SOL x ${initialMonths}`);
+      this.logger.log(`   Monthly Fee (1% of deployment cost): ${lamportsToSOL(monthlyFee)} SOL x ${initialMonths}`);
       this.logger.log(`   Total Payment: ${lamportsToSOL(totalPayment)} SOL (${totalPayment} lamports)`);
 
       return breakdown;
@@ -579,11 +581,11 @@ export class DeploymentService {
       this.logger.log(`   ⏳ This may take a moment...`);
       
       try {
-        await this.programService.fundTemporaryWallet(
-          programHash,
-          temporaryWallet.publicKey,
-          deployment.deployment_cost,
-        );
+      await this.programService.fundTemporaryWallet(
+        programHash,
+        temporaryWallet.publicKey,
+        deployment.deployment_cost,
+      );
         this.logger.log(`   ✅ Funding completed successfully`);
       } catch (fundError: any) {
         this.logger.error(`   ❌ Funding failed: ${fundError.message}`);
@@ -1007,7 +1009,26 @@ export class DeploymentService {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.logCliRecoveryHint(message, payerKeypairPath);
+      
+      // Try to automatically recover from failed buffer account
+      const recoveryResult = await this.tryRecoverFailedBuffer(message, payerKeypairPath);
+      if (recoveryResult.recovered) {
+        this.logger.log(`✅ Recovered ${recoveryResult.lamportsRecovered / 1e9} SOL from failed buffer account`);
+        this.logger.log(`   Retrying deployment...`);
+        
+        // Retry deployment once after recovery
+        try {
+          ({ stdout, stderr } = await this.runSolanaCli(args, 'program deploy (retry)', {
+            timeoutMs: this.getCliTimeoutMs(),
+          }));
+        } catch (retryError) {
+          const retryMessage = retryError instanceof Error ? retryError.message : String(retryError);
+          this.logCliRecoveryHint(retryMessage, payerKeypairPath);
+          throw retryError;
+        }
+      } else {
       throw error;
+      }
     }
 
     const combinedOutput = `${stdout}\n${stderr}`;
@@ -1241,6 +1262,142 @@ export class DeploymentService {
         `⚠️  Temporary deploy wallet at ${keypairPath} ran out of SOL during CLI deployment.`,
       );
       this.logger.warn('   Consider increasing the deployment buffer or staking more SOL to the treasury.');
+    }
+  }
+
+  /**
+   * Try to automatically recover from a failed buffer account
+   * Returns recovery result with lamports recovered
+   */
+  private async tryRecoverFailedBuffer(
+    errorMessage: string,
+    payerKeypairPath: string,
+  ): Promise<{ recovered: boolean; lamportsRecovered: number; bufferAddress?: string }> {
+    if (!errorMessage.includes('Recover the intermediate account')) {
+      return { recovered: false, lamportsRecovered: 0 };
+    }
+
+    try {
+      this.logger.log('🔄 Attempting to recover failed buffer account...');
+      
+      // Extract buffer address from error message
+      const closeMatch = errorMessage.match(/solana program close ([1-9A-HJ-NP-Za-km-z]{32,44})/);
+      if (!closeMatch) {
+        this.logger.warn('   ⚠️  Could not extract buffer address from error message');
+        return { recovered: false, lamportsRecovered: 0 };
+      }
+
+      const bufferAddress = closeMatch[1];
+      this.logger.log(`   Buffer address: ${bufferAddress}`);
+
+      // Extract seed phrase
+      const mnemonicMatch = errorMessage.match(/seed phrase:\s*([a-z\s]+)/i);
+      if (!mnemonicMatch) {
+        this.logger.warn('   ⚠️  Could not extract seed phrase from error message');
+        this.logger.warn('   ⚠️  Manual recovery required - see logs above for instructions');
+        return { recovered: false, lamportsRecovered: 0 };
+      }
+
+      const seedPhrase = mnemonicMatch[1].trim();
+      this.logger.log(`   Seed phrase found: ${seedPhrase.split(' ').length} words`);
+
+      // Try to recover keypair and close buffer account
+      // Note: This requires solana-keygen CLI to be available
+      const config = this.configService.getConfig();
+      const tempKeypairPath = path.join(this.tempDir, `buffer-recover-${Date.now()}.json`);
+
+      try {
+        // Step 1: Recover keypair from seed phrase
+        this.logger.log('   Step 1: Recovering keypair from seed phrase...');
+        const recoverArgs = [
+          'recover',
+          'prompt://?full-path=',
+          '-o',
+          tempKeypairPath,
+          '--force',
+        ];
+
+        // Use echo to pipe seed phrase to solana-keygen
+        const seedWords = seedPhrase.split(' ');
+        const seedInput = seedWords.join('\n') + '\n';
+        
+        // Try using solana-keygen recover with stdin
+        const { exec } = require('child_process');
+        const { promisify } = require('util');
+        const execAsync = promisify(exec);
+        
+        // Create a script to recover the keypair
+        const recoverScript = `echo "${seedWords.join('\\n')}" | solana-keygen recover prompt://?full-path= -o ${tempKeypairPath} --force`;
+        
+        try {
+          await execAsync(recoverScript, { timeout: 30000 });
+          this.logger.log(`   ✅ Keypair recovered to: ${tempKeypairPath}`);
+        } catch (recoverError: any) {
+          this.logger.warn(`   ⚠️  Failed to recover keypair automatically: ${recoverError.message}`);
+          this.logger.warn('   ⚠️  Manual recovery required - see logs above for instructions');
+          return { recovered: false, lamportsRecovered: 0, bufferAddress };
+        }
+
+        // Step 2: Close buffer account
+        this.logger.log('   Step 2: Closing buffer account to recover lamports...');
+        const closeArgs = [
+          'program',
+          'close',
+          bufferAddress,
+          '--bypass-warning',
+          '--url',
+          config.currentRpc,
+          '--keypair',
+          tempKeypairPath,
+        ];
+
+        const { stdout, stderr } = await this.runSolanaCli(closeArgs, 'close buffer', {
+          timeoutMs: 60000,
+        });
+
+        const combinedOutput = `${stdout}\n${stderr}`;
+        
+        // Extract recovered lamports from output
+        const recoveredMatch = combinedOutput.match(/([\d.]+)\s+SOL reclaimed/i);
+        const lamportsRecovered = recoveredMatch
+          ? parseFloat(recoveredMatch[1]) * LAMPORTS_PER_SOL
+          : 0;
+
+        // Clean up temp keypair file
+        try {
+          if (fs.existsSync(tempKeypairPath)) {
+            fs.unlinkSync(tempKeypairPath);
+          }
+        } catch (cleanupError) {
+          // Ignore cleanup errors
+        }
+
+        if (lamportsRecovered > 0) {
+          this.logger.log(`   ✅ Buffer account closed successfully`);
+          this.logger.log(`   ✅ Recovered ${lamportsRecovered / 1e9} SOL`);
+          return { recovered: true, lamportsRecovered, bufferAddress };
+        } else {
+          this.logger.warn('   ⚠️  Buffer account closed but no lamports recovered');
+          return { recovered: true, lamportsRecovered: 0, bufferAddress };
+        }
+      } catch (closeError: any) {
+        this.logger.warn(`   ⚠️  Failed to close buffer account: ${closeError.message}`);
+        this.logger.warn('   ⚠️  Manual recovery required - see logs above for instructions');
+        
+        // Clean up temp keypair file
+        try {
+          if (fs.existsSync(tempKeypairPath)) {
+            fs.unlinkSync(tempKeypairPath);
+          }
+        } catch (cleanupError) {
+          // Ignore cleanup errors
+        }
+        
+        return { recovered: false, lamportsRecovered: 0, bufferAddress };
+      }
+    } catch (error: any) {
+      this.logger.warn(`   ⚠️  Recovery attempt failed: ${error.message}`);
+      return { recovered: false, lamportsRecovered: 0 };
     }
   }
 

@@ -1,5 +1,6 @@
 import { Connection, Keypair, PublicKey, Transaction, SystemProgram } from '@solana/web3.js';
 import * as fs from 'fs';
+import { getD2DProgramId } from '../src/program/utils/pda.utils';
 
 /**
  * Close old lender_stake account to fix AccountDiscriminatorMismatch
@@ -8,7 +9,8 @@ import * as fs from 'fs';
 async function main() {
   const rpcUrl = process.env.SOLANA_DEVNET_RPC || 'https://api.devnet.solana.com';
   const adminWalletPath = process.env.ADMIN_WALLET_PATH || '/Users/saitamacoder/.config/solana/id.json';
-  const programId = new PublicKey(process.env.D2D_PROGRAM_ID || 'Hn6enqRbfjQywqVbkNNFe6rauWjQLvea8Fyh6fZZPpA8');
+  // Get program ID from IDL (no hardcoding, allow override via env)
+  const programId = new PublicKey(process.env.D2D_PROGRAM_ID || getD2DProgramId().toString());
 
   console.log('\n🔐 Loading admin wallet from:', adminWalletPath);
   const adminKeypairData = JSON.parse(fs.readFileSync(adminWalletPath, 'utf8'));

@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { PublicKey } from '@solana/web3.js';
 import * as fs from 'fs';
+import { getD2DProgramId } from '../program/utils/pda.utils';
 
 export interface AppConfig {
   programId: string;
@@ -27,7 +28,9 @@ export class ConfigService implements OnModuleInit {
       // Determine environment (devnet or mainnet)
       const environment = (process.env.SOLANA_ENV || 'devnet').toLowerCase() as 'devnet' | 'mainnet';
       
-      const programId = process.env.D2D_PROGRAM_ID || 'Hn6enqRbfjQywqVbkNNFe6rauWjQLvea8Fyh6fZZPpA8';
+      // Get program ID from IDL (single source of truth)
+      // Allow override via environment variable for flexibility
+      const programId = process.env.D2D_PROGRAM_ID || getD2DProgramId().toString();
 
       // RPC endpoints
       const devnetRpc = process.env.SOLANA_DEVNET_RPC || 'https://api.devnet.solana.com';

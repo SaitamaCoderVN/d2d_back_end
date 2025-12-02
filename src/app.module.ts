@@ -9,6 +9,7 @@ import { CryptoModule } from './crypto/crypto.module';
 import { SupabaseModule } from './supabase/supabase.module';
 import { PoolModule } from './pool/pool.module';
 import { CloseProgramModule } from './close-program/close-program.module';
+import { PointsModule } from './points/points.module';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { CloseProgramModule } from './close-program/close-program.module';
     CryptoModule,
     PoolModule,
     CloseProgramModule,
+    PointsModule,
   ],
 })
 export class AppModule {}

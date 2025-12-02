@@ -1506,6 +1506,77 @@ export class ProgramService implements OnModuleInit {
   }
 
   /**
+   * Admin withdraw from Reward Pool
+   */
+  async adminWithdrawRewardPool(
+    amount: number,
+    destination: PublicKey,
+    reason: string,
+  ): Promise<string> {
+    try {
+      this.logger.log('═══════════════════════════════════════════════');
+      this.logger.log('💰 Admin Withdraw from Reward Pool');
+      this.logger.log('═══════════════════════════════════════════════');
+      this.logger.log(`   Amount: ${amount / 1e9} SOL (${amount} lamports)`);
+      this.logger.log(`   Destination: ${destination.toString()}`);
+      this.logger.log(`   Reason: ${reason}`);
+
+      const [treasuryPoolPDA] = this.getTreasuryPoolPDA();
+      const [rewardPoolPDA] = this.getRewardPoolPDA();
+
+      // Fetch current state
+      const treasuryPool = await this.program.account.treasuryPool.fetch(treasuryPoolPDA, 'confirmed');
+      const rewardPoolInfo = await this.connection.getAccountInfo(rewardPoolPDA, 'confirmed');
+      
+      if (!rewardPoolInfo) {
+        throw new Error('Reward Pool account not found');
+      }
+
+      const actualBalance = rewardPoolInfo.lamports;
+      const trackedBalance = treasuryPool.rewardPoolBalance.toNumber();
+
+      this.logger.log(`   Reward Pool tracked balance: ${trackedBalance / 1e9} SOL`);
+      this.logger.log(`   Reward Pool actual balance: ${actualBalance / 1e9} SOL`);
+
+      if (amount > trackedBalance) {
+        throw new Error(`Insufficient tracked balance. Available: ${trackedBalance / 1e9} SOL, Requested: ${amount / 1e9} SOL`);
+      }
+
+      if (amount > actualBalance) {
+        throw new Error(`Insufficient actual balance. Available: ${actualBalance / 1e9} SOL, Requested: ${amount / 1e9} SOL`);
+      }
+
+      const tx = await (this.program.methods as any)
+        .adminWithdrawRewardPool(
+          new BN(amount),
+          reason,
+        )
+        .accountsPartial({
+          treasuryPool: treasuryPoolPDA,
+          rewardPool: rewardPoolPDA,
+          admin: this.adminKeypair.publicKey,
+          destination,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([this.adminKeypair])
+        .rpc({ skipPreflight: true, commitment: 'confirmed' });
+
+      this.logger.log(`✅ Admin withdraw from Reward Pool successful!`);
+      this.logger.log(`   Signature: ${tx}`);
+      this.logger.log(`   Explorer: https://explorer.solana.com/tx/${tx}?cluster=${process.env.SOLANA_ENV || 'devnet'}`);
+      this.logger.log('═══════════════════════════════════════════════');
+
+      return tx;
+    } catch (error: any) {
+      this.logger.error(`Failed to withdraw from Reward Pool: ${error.message}`);
+      if (error.message?.includes('timeout') || error.message?.includes('not found')) {
+        throw new Error(`admin_withdraw_reward_pool instruction not available. Please deploy the updated smart contract first: cd d2d-program-sol && anchor build && anchor deploy. Error: ${error.message}`);
+      }
+      throw error;
+    }
+  }
+
+  /**
    * Sync liquid_balance with actual account balance
    * Admin-only instruction to fix liquid_balance when it's out of sync
    */

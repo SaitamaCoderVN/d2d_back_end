@@ -1,7 +1,9 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
 import { ProgramService } from '../program/program.service';
 import { PublicKey, Connection } from '@solana/web3.js';
 import { SupabaseService } from '../supabase/supabase.service';
+import { BorshAccountsCoder } from '@coral-xyz/anchor';
+import { getTreasuryPoolAddress, getRewardPoolAddress } from '../program/utils/pda.utils';
 
 @Injectable()
 export class PoolService {
@@ -49,19 +51,12 @@ export class PoolService {
     availableForDeploySOL: number;
   }> {
     try {
-      // Use the exact treasury pool address provided by user
-      const TREASURY_POOL_ADDRESS = 'D6h9mgXL5enPyiG2M1W7Jn9yjXh8md1fCAcP5zBJH6ma';
-      const treasuryPoolPDA = new PublicKey(TREASURY_POOL_ADDRESS);
+      // Derive treasury pool PDA from seeds (no hardcoding)
+      const treasuryPoolPDA = getTreasuryPoolAddress();
+      const TREASURY_POOL_ADDRESS = treasuryPoolPDA.toString();
       const connection = this.programService.getConnection();
       
-      // Verify the derived PDA matches the expected address
-      const [derivedPDA] = this.programService.getTreasuryPoolPDA();
-      if (!derivedPDA.equals(treasuryPoolPDA)) {
-        this.logger.warn(`⚠️  Derived PDA (${derivedPDA.toString()}) does not match expected address (${TREASURY_POOL_ADDRESS})`);
-        this.logger.warn(`   Using provided address: ${TREASURY_POOL_ADDRESS}`);
-      } else {
-        this.logger.log(`✅ Verified PDA matches: ${TREASURY_POOL_ADDRESS}`);
-      }
+      this.logger.log(`✅ Using derived Treasury Pool PDA: ${TREASURY_POOL_ADDRESS}`);
       
       // Fetch both struct data and actual account balance
       const [treasuryPool, accountInfo] = await Promise.all([
@@ -78,7 +73,7 @@ export class PoolService {
       }
 
       // Get actual account balance (total SOL in the account)
-      // This is the REAL amount of SOL in the treasury pool account D6h9mgXL5enPyiG2M1W7Jn9yjXh8md1fCAcP5zBJH6ma
+      // This is the REAL amount of SOL in the treasury pool account
       const actualAccountBalanceLamports = accountInfo.lamports;
       const actualAccountBalanceSOL = actualAccountBalanceLamports / 1_000_000_000;
       
@@ -244,9 +239,9 @@ export class PoolService {
       this.logger.log(`     Total Deposited: ${poolState.totalDeposited / 1e9} SOL`);
       this.logger.log(`     Reward Pool Balance (from struct): ${poolState.rewardPoolBalance / 1e9} SOL`);
 
-      // Fetch Reward Pool balance from the specific address
-      const REWARD_POOL_ADDRESS = '3pCnsqt3rvNj4QigLwH3W88LMuYTczgjcuK435z7ZF6b';
-      const rewardPoolPDA = new PublicKey(REWARD_POOL_ADDRESS);
+      // Derive Reward Pool PDA from seeds (no hardcoding)
+      const rewardPoolPDA = getRewardPoolAddress();
+      const REWARD_POOL_ADDRESS = rewardPoolPDA.toString();
       
       let rewardPoolBalance = 0;
       try {
@@ -255,7 +250,7 @@ export class PoolService {
           rewardPoolBalance = rewardPoolInfo.lamports;
           this.logger.log(`   Reward Pool balance: ${rewardPoolBalance / 1e9} SOL (${rewardPoolBalance} lamports)`);
         } else {
-          this.logger.warn(`   Reward Pool account not found at ${REWARD_POOL_ADDRESS}`);
+          this.logger.warn(`   Reward Pool account not found at ${REWARD_POOL_ADDRESS} (derived from seeds)`);
         }
       } catch (error) {
         this.logger.warn(`   Failed to fetch reward pool balance: ${error instanceof Error ? error.message : String(error)}`);
@@ -263,23 +258,96 @@ export class PoolService {
 
       // Fetch all BackerDeposit accounts from on-chain
       let accounts: any[] = [];
+      const programId = program.programId;
+      this.logger.log(`   Program ID: ${programId.toString()}`);
+      this.logger.log(`   Reward Per Share: ${rewardPerShare.toString()}`);
+      
       try {
+        this.logger.log('   Attempting to fetch backerDeposit accounts using program.account.backerDeposit.all()...');
         accounts = await (program.account as any).backerDeposit?.all() || [];
-      } catch (e) {
+        this.logger.log(`   ✅ Successfully fetched ${accounts.length} backerDeposit accounts`);
+        
+        if (accounts.length === 0) {
+          this.logger.warn(`   ⚠️  No accounts found via .all() method - this might indicate:`);
+          this.logger.warn(`      - No backers have staked yet`);
+          this.logger.warn(`      - Program ID mismatch`);
+          this.logger.warn(`      - Network mismatch (checking ${this.programService.getConnection().rpcEndpoint})`);
+        }
+      } catch (e: any) {
+        this.logger.warn(`   ⚠️  Failed to fetch backerDeposit: ${e?.message || String(e)}`);
         try {
-          // Fallback to lenderStake (legacy name)
+          this.logger.log('   Attempting fallback to lenderStake...');
           accounts = await (program.account as any).lenderStake?.all() || [];
-        } catch (e2) {
-          this.logger.warn('Could not fetch backer accounts');
-          return {
-            leaderboard: [],
-            rewardPoolBalance,
-            rewardPoolAddress: REWARD_POOL_ADDRESS,
-          };
+          this.logger.log(`   ✅ Successfully fetched ${accounts.length} lenderStake accounts (legacy)`);
+        } catch (e2: any) {
+          this.logger.error(`   ❌ Failed to fetch lenderStake: ${e2?.message || String(e2)}`);
+          this.logger.error('   Stack trace:', e2?.stack);
+          
+          // Try alternative method: getProgramAccounts with discriminator
+          try {
+            this.logger.log('   Attempting alternative method: getProgramAccounts...');
+            const programId = this.programService.getProgram().programId;
+            const allAccounts = await connection.getProgramAccounts(programId, {
+              filters: [
+                {
+                  dataSize: 165, // BackerDeposit account size: 8 (discriminator) + 32 (backer) + 8 (depositedAmount) + 16 (rewardDebt) + 8 (claimedTotal) + 1 (isActive) + 1 (bump) = 74 bytes, but let's use 165 to be safe
+                },
+              ],
+            });
+            
+            this.logger.log(`   Found ${allAccounts.length} accounts via getProgramAccounts`);
+            
+            // Decode accounts manually
+            const coder = new BorshAccountsCoder(program.idl as any);
+            const backerDepositDiscriminator = Buffer.from([233, 24, 109, 17, 7, 122, 24, 21]); // From IDL
+            
+            for (const accountInfo of allAccounts) {
+              try {
+                // Account data from getProgramAccounts is already a Buffer
+                const accountData = accountInfo.account.data instanceof Buffer 
+                  ? accountInfo.account.data 
+                  : Buffer.from(accountInfo.account.data);
+                
+                // Check if account starts with backerDeposit discriminator
+                if (accountData.length >= 8 && accountData.slice(0, 8).equals(backerDepositDiscriminator)) {
+                  const decoded = coder.decode('backerDeposit', accountData);
+                  accounts.push({
+                    publicKey: accountInfo.pubkey,
+                    account: decoded,
+                  });
+                }
+              } catch (decodeError: any) {
+                // Skip accounts that can't be decoded
+                this.logger.debug(`   Skipped account ${accountInfo.pubkey.toString()}: ${decodeError?.message || String(decodeError)}`);
+                continue;
+              }
+            }
+            
+            this.logger.log(`   ✅ Decoded ${accounts.length} backerDeposit accounts from getProgramAccounts`);
+          } catch (e3: any) {
+            this.logger.error(`   ❌ Alternative method also failed: ${e3?.message || String(e3)}`);
+            this.logger.warn('   Returning empty leaderboard');
+            return {
+              leaderboard: [],
+              rewardPoolBalance,
+              rewardPoolAddress: REWARD_POOL_ADDRESS,
+            };
+          }
         }
       }
 
-      this.logger.log(`   Found ${accounts.length} backer accounts`);
+      this.logger.log(`   Found ${accounts.length} backer accounts total`);
+
+      // If no accounts found, log detailed information
+      if (accounts.length === 0) {
+        this.logger.warn(`   ⚠️  NO BACKER ACCOUNTS FOUND ON-CHAIN`);
+        this.logger.warn(`   This means:`);
+        this.logger.warn(`     1. No one has staked SOL yet`);
+        this.logger.warn(`     2. Reward Pool has ${rewardPoolBalance / 1e9} SOL from developer fees`);
+        this.logger.warn(`     3. Once backers stake, they will be able to claim these rewards`);
+        this.logger.warn(`   Program ID: ${programId.toString()}`);
+        this.logger.warn(`   Network: ${this.programService.getConnection().rpcEndpoint}`);
+      }
 
       const leaderboard: Array<{
         wallet: string;
@@ -289,46 +357,73 @@ export class PoolService {
         isActive: boolean;
       }> = [];
 
+      // Log all accounts found (before filtering)
+      this.logger.log(`   Processing ${accounts.length} accounts...`);
+      
       for (const account of accounts) {
         try {
           const acc = account.account;
-          const isActive = acc.isActive;
-          const depositedAmount = (acc.depositedAmount as any).toNumber 
-            ? (acc.depositedAmount as any).toNumber() 
-            : Number(acc.depositedAmount);
           
-          // Only include active backers with deposits
-          if (isActive && depositedAmount > 0) {
-            const rewardDebt = (acc.rewardDebt as any).toBigInt 
-              ? (acc.rewardDebt as any).toBigInt() 
-              : BigInt(acc.rewardDebt.toString());
-            const claimedTotal = (acc.claimedTotal as any).toNumber 
-              ? (acc.claimedTotal as any).toNumber() 
-              : Number(acc.claimedTotal);
-            
-            // Calculate claimable rewards
-            // Formula: (deposited_amount * reward_per_share - reward_debt) / PRECISION
-            const depositedAmountBigInt = BigInt(depositedAmount);
-            const accumulated = depositedAmountBigInt * rewardPerShare;
-            
-            // Ensure we don't get negative values (shouldn't happen, but safe)
-            const claimableBigInt = accumulated >= rewardDebt 
-              ? (accumulated - rewardDebt) / PRECISION 
-              : BigInt(0);
-            const claimableRewards = Number(claimableBigInt);
+          // Handle different account structures (from .all() vs manual decode)
+          const backerPubkey = acc.backer 
+            ? (acc.backer instanceof PublicKey ? acc.backer : new PublicKey(acc.backer))
+            : account.publicKey;
+          
+          const isActive = acc.isActive !== undefined ? acc.isActive : acc.is_active;
+          const depositedAmount = (acc.depositedAmount as any)?.toNumber 
+            ? (acc.depositedAmount as any).toNumber() 
+            : (acc.deposited_amount !== undefined ? Number(acc.deposited_amount) : Number(acc.depositedAmount || 0));
+          
+          // Log each account for debugging
+          const backerStr = backerPubkey instanceof PublicKey ? backerPubkey.toString() : String(backerPubkey);
+          this.logger.log(`   Account ${backerStr.slice(0, 8)}...: isActive=${isActive}, deposited=${depositedAmount / 1e9} SOL`);
+          
+          // Calculate all values first
+          const rewardDebt = (acc.rewardDebt as any)?.toBigInt 
+            ? (acc.rewardDebt as any).toBigInt() 
+            : (acc.reward_debt !== undefined ? BigInt(acc.reward_debt.toString()) : BigInt(acc.rewardDebt?.toString() || '0'));
+          const claimedTotal = (acc.claimedTotal as any)?.toNumber 
+            ? (acc.claimedTotal as any).toNumber() 
+            : (acc.claimed_total !== undefined ? Number(acc.claimed_total) : Number(acc.claimedTotal || 0));
+          
+          // Calculate claimable rewards
+          // Formula: (deposited_amount * reward_per_share - reward_debt) / PRECISION
+          const depositedAmountBigInt = BigInt(depositedAmount);
+          const accumulated = depositedAmountBigInt * rewardPerShare;
+          
+          // Ensure we don't get negative values (shouldn't happen, but safe)
+          const claimableBigInt = accumulated >= rewardDebt 
+            ? (accumulated - rewardDebt) / PRECISION 
+            : BigInt(0);
+          const claimableRewards = Number(claimableBigInt);
+          
+          // Log detailed info for each account
+          this.logger.log(`     - Deposited: ${depositedAmount / 1e9} SOL, Claimable: ${claimableRewards / 1e9} SOL, Claimed: ${claimedTotal / 1e9} SOL`);
+          
+          // Include ALL accounts that have:
+          // 1. Active deposits (isActive && depositedAmount > 0), OR
+          // 2. Claimable rewards > 0, OR
+          // 3. Claimed rewards > 0
+          // This ensures we show all backers who have ever participated, even if they've withdrawn
+          const hasActiveDeposit = isActive && depositedAmount > 0;
+          const hasClaimableRewards = claimableRewards > 0;
+          const hasClaimedRewards = claimedTotal > 0;
+          
+          if (hasActiveDeposit || hasClaimableRewards || hasClaimedRewards) {
 
-            // Log detailed calculation for debugging (only first few)
-            if (leaderboard.length < 3) {
-              this.logger.log(`   Backer ${acc.backer.toString().slice(0, 8)}...:`);
-              this.logger.log(`     Deposited: ${depositedAmount / 1e9} SOL (${depositedAmount} lamports)`);
-              this.logger.log(`     Reward Per Share: ${rewardPerShare.toString()}`);
-              this.logger.log(`     Reward Debt: ${rewardDebt.toString()}`);
-              this.logger.log(`     Accumulated: ${accumulated.toString()}`);
-              this.logger.log(`     Claimable: ${claimableRewards / 1e9} SOL (${claimableRewards} lamports)`);
-            }
+            // Log detailed calculation for all accounts (for debugging)
+            const backerStr = backerPubkey instanceof PublicKey ? backerPubkey.toString() : String(backerPubkey);
+            this.logger.log(`   ✅ Including backer ${backerStr.slice(0, 8)}...${backerStr.slice(-8)}:`);
+            this.logger.log(`     - Deposited: ${depositedAmount / 1e9} SOL (${depositedAmount} lamports)`);
+            this.logger.log(`     - Reward Per Share: ${rewardPerShare.toString()}`);
+            this.logger.log(`     - Reward Debt: ${rewardDebt.toString()}`);
+            this.logger.log(`     - Accumulated: ${accumulated.toString()}`);
+            this.logger.log(`     - Claimable: ${claimableRewards / 1e9} SOL (${claimableRewards} lamports)`);
+            this.logger.log(`     - Claimed: ${claimedTotal / 1e9} SOL (${claimedTotal} lamports)`);
+            this.logger.log(`     - Total Rewards: ${(claimableRewards + claimedTotal) / 1e9} SOL`);
 
             leaderboard.push({
-              wallet: acc.backer.toString(),
+              wallet: backerPubkey instanceof PublicKey ? backerPubkey.toString() : String(backerPubkey),
               depositedAmount,
               claimableRewards,
               claimedTotal,
@@ -337,6 +432,7 @@ export class PoolService {
           }
         } catch (error) {
           this.logger.warn(`Failed to process backer account: ${error instanceof Error ? error.message : String(error)}`);
+          this.logger.debug(`   Account data: ${JSON.stringify(account, null, 2)}`);
           continue;
         }
       }
@@ -366,9 +462,189 @@ export class PoolService {
         rewardPoolBalance,
         rewardPoolAddress: REWARD_POOL_ADDRESS,
       };
-    } catch (error) {
-      this.logger.error(`Failed to get leaderboard: ${error.message}`);
-      throw error;
+    } catch (error: any) {
+      this.logger.error(`Failed to get leaderboard: ${error?.message || String(error)}`);
+      this.logger.error(`Stack: ${error?.stack}`);
+      
+      // Return empty leaderboard instead of throwing to prevent 500 errors
+      // This allows frontend to display "No backers found" message
+      const rewardPoolAddress = getRewardPoolAddress().toString();
+      return {
+        leaderboard: [],
+        rewardPoolBalance: 0,
+        rewardPoolAddress: rewardPoolAddress,
+      };
+    }
+  }
+
+  /**
+   * Calculate excess rewards (surplus) in Reward Pool
+   * Excess = reward_pool_balance - total_claimable_rewards
+   * Only the authorized admin can withdraw this excess
+   */
+  async calculateExcessRewards(): Promise<{
+    rewardPoolBalance: number; // lamports
+    totalClaimableRewards: number; // lamports - sum of all backers' claimable rewards
+    excessRewards: number; // lamports - surplus that can be withdrawn by authorized admin
+    leaderboard: Array<{
+      wallet: string;
+      depositedAmount: number;
+      claimableRewards: number;
+      claimedTotal: number;
+    }>;
+  }> {
+    try {
+      this.logger.log('📊 Calculating excess rewards...');
+      
+      // Get leaderboard to calculate total claimable
+      const leaderboardData = await this.getLeaderboard();
+      const totalClaimable = leaderboardData.leaderboard.reduce(
+        (sum, entry) => sum + entry.claimableRewards,
+        0
+      );
+      
+      const excessRewards = Math.max(0, leaderboardData.rewardPoolBalance - totalClaimable);
+      
+      this.logger.log(`   Reward Pool Balance: ${leaderboardData.rewardPoolBalance / 1e9} SOL`);
+      this.logger.log(`   Total Claimable Rewards: ${totalClaimable / 1e9} SOL`);
+      this.logger.log(`   Excess Rewards (surplus): ${excessRewards / 1e9} SOL`);
+      
+      if (excessRewards > 0) {
+        this.logger.log(`   ✅ Excess rewards available for authorized admin withdrawal`);
+      } else {
+        this.logger.log(`   ⚠️  No excess rewards (all rewards are claimable by backers)`);
+      }
+      
+      return {
+        rewardPoolBalance: leaderboardData.rewardPoolBalance,
+        totalClaimableRewards: totalClaimable,
+        excessRewards,
+        leaderboard: leaderboardData.leaderboard.map(entry => ({
+          wallet: entry.wallet,
+          depositedAmount: entry.depositedAmount,
+          claimableRewards: entry.claimableRewards,
+          claimedTotal: entry.claimedTotal,
+        })),
+      };
+    } catch (error: any) {
+      this.logger.error(`Failed to calculate excess rewards: ${error?.message || String(error)}`);
+      // Return empty data instead of throwing
+      return {
+        rewardPoolBalance: 0,
+        totalClaimableRewards: 0,
+        excessRewards: 0,
+        leaderboard: [],
+      };
+    }
+  }
+
+  /**
+   * Get user's stake and reward information
+   */
+  async getUserStakeInfo(walletAddress: string): Promise<{
+    wallet: string;
+    depositedAmount: number; // lamports
+    claimableRewards: number; // lamports
+    claimedTotal: number; // lamports
+    isActive: boolean;
+    totalRewards: number; // lamports (claimable + claimed)
+  }> {
+    try {
+      this.logger.log(`📊 Fetching stake info for wallet: ${walletAddress}`);
+      
+      const program = this.programService.getProgram();
+      const poolState = await this.getPoolState();
+      const PRECISION = BigInt('1000000000000'); // 1e12
+      const rewardPerShare = BigInt(poolState.rewardPerShare);
+
+      // Get BackerDeposit PDA
+      const [backerDepositPDA] = this.programService.getBackerDepositPDA(new PublicKey(walletAddress));
+      
+      try {
+        const backerDeposit = await program.account.backerDeposit.fetch(backerDepositPDA);
+        
+        const isActive = backerDeposit.isActive;
+        const depositedAmount = backerDeposit.depositedAmount.toNumber();
+        const rewardDebt = backerDeposit.rewardDebt.toBigInt();
+        const claimedTotal = backerDeposit.claimedTotal.toNumber();
+
+        // Calculate claimable rewards
+        // Formula: (deposited_amount * reward_per_share - reward_debt) / PRECISION
+        const depositedAmountBigInt = BigInt(depositedAmount);
+        const accumulated = depositedAmountBigInt * rewardPerShare;
+        
+        // Ensure we don't get negative values
+        const claimableBigInt = accumulated >= rewardDebt 
+          ? (accumulated - rewardDebt) / PRECISION 
+          : BigInt(0);
+        const claimableRewards = Number(claimableBigInt);
+        const totalRewards = claimableRewards + claimedTotal;
+
+        this.logger.log(`   ✅ User stake info:`);
+        this.logger.log(`     Deposited: ${depositedAmount / 1e9} SOL`);
+        this.logger.log(`     Claimable: ${claimableRewards / 1e9} SOL`);
+        this.logger.log(`     Claimed: ${claimedTotal / 1e9} SOL`);
+        this.logger.log(`     Total Rewards: ${totalRewards / 1e9} SOL`);
+
+        return {
+          wallet: walletAddress,
+          depositedAmount,
+          claimableRewards,
+          claimedTotal,
+          isActive,
+          totalRewards,
+        };
+      } catch (error: any) {
+        // User hasn't staked yet - handle various error messages
+        const errorMessage = error?.message || String(error);
+        const errorCode = error?.code || error?.errorCode || '';
+        
+        if (
+          errorMessage.includes('Account does not exist') ||
+          errorMessage.includes('not found') ||
+          errorMessage.includes('InvalidAccountData') ||
+          errorCode === 'InvalidAccountData' ||
+          errorCode === 3001 || // AccountDiscriminatorMismatch
+          errorCode === 3002 // AccountDiscriminatorMismatch
+        ) {
+          this.logger.log(`   ℹ️  User hasn't staked yet (account doesn't exist)`);
+          return {
+            wallet: walletAddress,
+            depositedAmount: 0,
+            claimableRewards: 0,
+            claimedTotal: 0,
+            isActive: false,
+            totalRewards: 0,
+          };
+        }
+        
+        // Log unexpected errors but don't throw - return empty data instead
+        this.logger.warn(`   ⚠️  Unexpected error fetching stake account: ${errorMessage}`);
+        this.logger.warn(`   Error code: ${errorCode}`);
+        this.logger.warn(`   Returning empty stake info`);
+        return {
+          wallet: walletAddress,
+          depositedAmount: 0,
+          claimableRewards: 0,
+          claimedTotal: 0,
+          isActive: false,
+          totalRewards: 0,
+        };
+      }
+    } catch (error: any) {
+      // Catch-all error handler
+      this.logger.error(`Failed to get user stake info: ${error?.message || String(error)}`);
+      this.logger.error(`Stack: ${error?.stack}`);
+      
+      // Return empty data instead of throwing to prevent 500 errors
+      return {
+        wallet: walletAddress,
+        depositedAmount: 0,
+        claimableRewards: 0,
+        claimedTotal: 0,
+        isActive: false,
+        totalRewards: 0,
+      };
     }
   }
 }

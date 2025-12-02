@@ -33,10 +33,11 @@ export function calculateDeploymentPlatformFee(rentCost: number): number {
 
 /**
  * Calculate monthly subscription fee
- * For now, a fixed fee of 0.01 SOL per month
+ * 1% of deployment cost (borrowed amount) per month
+ * This ensures backers receive 1-1.2% returns when their SOL is fully utilized
  */
-export function calculateMonthlyFee(): number {
-  return 0.01 * LAMPORTS_PER_SOL; // 0.01 SOL
+export function calculateMonthlyFee(deploymentCost: number): number {
+  return Math.ceil(deploymentCost * 0.01); // 1% of deployment cost
 }
 
 /**

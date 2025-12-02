@@ -323,10 +323,10 @@ export class TransactionService {
           this.logger.log(`   ✅ Total amount matches (${totalFound / 1e9} SOL), allowing combined transfer`);
           // Allow if total matches (user might have sent combined payment)
         } else {
-          return {
-            isValid: false,
+        return {
+          isValid: false,
             error: `Expected ${nonZeroExpectedTransfers.length} transfers, found ${transfers.length}. Total amount mismatch: Expected ${totalExpected / 1e9} SOL, Got ${totalFound / 1e9} SOL`,
-          };
+        };
         }
       }
 
@@ -349,12 +349,12 @@ export class TransactionService {
               continue;
             }
             
-            return {
-              isValid: false,
+          return {
+            isValid: false,
               error: `Transfer to ${expected.to} not found. Expected: ${expected.amount / 1e9} SOL`,
-            };
-          }
-          
+          };
+        }
+
           // If we found transfers to this address but amount doesn't match exactly,
           // check if it's close enough
           const amountDifference = Math.abs(totalToExpectedAddress - expected.amount);
@@ -367,14 +367,14 @@ export class TransactionService {
             };
           }
         } else {
-          const amountDifference = Math.abs(found.amount - expected.amount);
-          const tolerance = 0.001 * LAMPORTS_PER_SOL;
+        const amountDifference = Math.abs(found.amount - expected.amount);
+        const tolerance = 0.001 * LAMPORTS_PER_SOL;
 
-          if (amountDifference > tolerance) {
-            return {
-              isValid: false,
+        if (amountDifference > tolerance) {
+          return {
+            isValid: false,
               error: `Amount mismatch for ${expected.to}. Expected: ${expected.amount / 1e9} SOL, Got: ${found.amount / 1e9} SOL`,
-            };
+          };
           }
         }
       }

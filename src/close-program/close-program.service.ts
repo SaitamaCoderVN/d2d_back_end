@@ -247,7 +247,7 @@ export class CloseProgramService {
       this.logger.log(`   Temporary wallet balance AFTER close (second check): ${tempWalletBalanceAfter / 1e9} SOL (${tempWalletBalanceAfter} lamports)`);
 
       // Step 7: Transfer all SOL from temporary wallet to treasury pool
-      // Treasury Pool PDA: D6h9mgXL5enPyiG2M1W7Jn9yjXh8md1fCAcP5zBJH6ma
+      // Treasury Pool PDA is derived from seeds (no hardcoding)
       const [treasuryPoolPDA] = this.programService.getTreasuryPoolPDA();
       this.logger.log(`[CLOSE] Treasury Pool PDA: ${treasuryPoolPDA.toString()}`);
       

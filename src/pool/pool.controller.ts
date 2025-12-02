@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Body, UseGuards, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Post, Get, Body, Param, UseGuards, HttpCode, HttpStatus } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { PoolService } from './pool.service';
 import { ProgramService } from '../program/program.service';
@@ -98,6 +98,85 @@ export class PoolController {
     rewardPoolAddress: string; // Reward pool PDA address
   }> {
     return await this.poolService.getLeaderboard();
+  }
+
+  /**
+   * Get user's stake and reward information
+   */
+  @Get('user/:wallet')
+  @ApiOperation({ summary: "Get user's stake and reward information" })
+  @ApiResponse({ status: 200, description: 'User stake and reward data' })
+  async getUserStakeInfo(@Param('wallet') wallet: string): Promise<{
+    wallet: string;
+    depositedAmount: number; // lamports
+    claimableRewards: number; // lamports
+    claimedTotal: number; // lamports
+    isActive: boolean;
+    totalRewards: number; // lamports (claimable + claimed)
+  }> {
+    return await this.poolService.getUserStakeInfo(wallet);
+  }
+
+  /**
+   * Get excess rewards calculation (surplus available for withdrawal)
+   */
+  @Get('excess-rewards')
+  @ApiOperation({ summary: 'Calculate excess rewards in Reward Pool' })
+  @ApiResponse({ status: 200, description: 'Excess rewards calculation' })
+  async getExcessRewards(): Promise<{
+    rewardPoolBalance: number;
+    totalClaimableRewards: number;
+    excessRewards: number;
+    leaderboard: Array<{
+      wallet: string;
+      depositedAmount: number;
+      claimableRewards: number;
+      claimedTotal: number;
+    }>;
+  }> {
+    return await this.poolService.calculateExcessRewards();
+  }
+
+  /**
+   * Admin withdraw excess from Reward Pool
+   * Only the authorized admin (A1dVA8adW1XXgcVmLCtbrvbVEVA1n3Q7kNPaTZVonjpq) can withdraw
+   * Only excess rewards (surplus) can be withdrawn, not backers' claimable rewards
+   */
+  @Post('admin/withdraw-reward-pool')
+  @UseGuards(AdminGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Admin withdraw excess from Reward Pool (authorized admin only)' })
+  @ApiResponse({ status: 200, description: 'Withdrawal successful' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 400, description: 'Amount exceeds excess rewards' })
+  @HttpCode(HttpStatus.OK)
+  async adminWithdrawRewardPool(
+    @Body() dto: { amount: number; destination: string; reason: string },
+  ): Promise<{ success: boolean; txSignature: string; excessRewards: number }> {
+    // Calculate excess rewards first
+    const excessData = await this.poolService.calculateExcessRewards();
+    
+    // Verify withdrawal amount doesn't exceed excess
+    if (dto.amount > excessData.excessRewards) {
+      throw new Error(
+        `Cannot withdraw ${dto.amount / 1e9} SOL. ` +
+        `Only ${excessData.excessRewards / 1e9} SOL excess available. ` +
+        `Total claimable by backers: ${excessData.totalClaimableRewards / 1e9} SOL`
+      );
+    }
+    
+    const { PublicKey } = await import('@solana/web3.js');
+    const destination = new PublicKey(dto.destination);
+    const txSignature = await this.programService.adminWithdrawRewardPool(
+      dto.amount,
+      destination,
+      dto.reason,
+    );
+    return { 
+      success: true, 
+      txSignature,
+      excessRewards: excessData.excessRewards,
+    };
   }
 }
 

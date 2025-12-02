@@ -5,7 +5,7 @@
  * IDL can be found at `target/idl/d2d_program_sol.json`.
  */
 export type D2dProgramSol = {
-  "address": "Hn6enqRbfjQywqVbkNNFe6rauWjQLvea8Fyh6fZZPpA8",
+  "address": "3RpgvJ1YGzcZfCKnUUsAzZcWrsTcMCeEqtNHvr6juGht",
   "metadata": {
     "name": "d2dProgramSol",
     "version": "0.1.0",
@@ -84,6 +84,96 @@ export type D2dProgramSol = {
         {
           "name": "admin",
           "writable": true,
+          "signer": true
+        },
+        {
+          "name": "destination",
+          "writable": true
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        },
+        {
+          "name": "reason",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "adminWithdrawRewardPool",
+      "docs": [
+        "Admin withdraw funds from Reward Pool"
+      ],
+      "discriminator": [
+        132,
+        153,
+        226,
+        156,
+        55,
+        217,
+        65,
+        132
+      ],
+      "accounts": [
+        {
+          "name": "treasuryPool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  101,
+                  97,
+                  115,
+                  117,
+                  114,
+                  121,
+                  95,
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "rewardPool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  119,
+                  97,
+                  114,
+                  100,
+                  95,
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
           "signer": true
         },
         {
@@ -2751,6 +2841,11 @@ export type D2dProgramSol = {
       "code": 6028,
       "name": "invalidWithdrawalRequest",
       "msg": "Invalid withdrawal request"
+    },
+    {
+      "code": 6029,
+      "name": "invalidAccountOwner",
+      "msg": "Invalid account owner - account must be owned by this program"
     }
   ],
   "types": [
