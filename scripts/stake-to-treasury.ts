@@ -16,8 +16,8 @@ const IDL = JSON.parse(
 import { getD2DProgramId, getTreasuryPoolPDA } from '../src/program/utils/pda.utils';
 
 async function main() {
-  // Get program ID from IDL (no hardcoding, allow override via env)
-  const programIdStr = process.env.D2D_PROGRAM_ID || getD2DProgramId().toString();
+  // Get program ID from IDL (single source of truth - no env override)
+  const programIdStr = getD2DProgramId().toString();
   const adminWalletPath = process.env.ADMIN_WALLET_PATH || '/Users/saitamacoder/.config/solana/id.json';
   const rpcUrl = process.env.SOLANA_DEVNET_RPC || 'https://api.devnet.solana.com';
   const treasuryWalletStr = process.env.TREASURY_WALLET_ADDRESS || 'A1dVA8adW1XXgcVmLCtbrvbVEVA1n3Q7kNPaTZVonjpq';

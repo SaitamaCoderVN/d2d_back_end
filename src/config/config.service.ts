@@ -29,8 +29,8 @@ export class ConfigService implements OnModuleInit {
       const environment = (process.env.SOLANA_ENV || 'devnet').toLowerCase() as 'devnet' | 'mainnet';
       
       // Get program ID from IDL (single source of truth)
-      // Allow override via environment variable for flexibility
-      const programId = process.env.D2D_PROGRAM_ID || getD2DProgramId().toString();
+      // No env override - IDL is the authoritative source
+      const programId = getD2DProgramId().toString();
 
       // RPC endpoints
       const devnetRpc = process.env.SOLANA_DEVNET_RPC || 'https://api.devnet.solana.com';
