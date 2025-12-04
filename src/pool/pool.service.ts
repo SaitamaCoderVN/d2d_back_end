@@ -647,5 +647,98 @@ export class PoolService {
       };
     }
   }
-}
 
+  /**
+   * Get utilization history (daily SOL usage)
+   */
+  async getUtilizationHistory(): Promise<{
+    history: Array<{ date: string; solUsed: number; deploymentCount: number }>;
+    currentUtilizationRate: number;
+    projectedApy: number;
+  }> {
+    try {
+      this.logger.log('📊 Calculating utilization history...');
+      
+      // 1. Get all deployments
+      const deployments = await this.supabaseService.getAllDeployments();
+      
+      // 2. Group by date
+      const dailyStats = new Map<string, { solUsed: number; deploymentCount: number }>();
+      
+      deployments.forEach(d => {
+        if (!d.created_at) return;
+        
+        const date = new Date(d.created_at).toISOString().split('T')[0];
+        const cost = (d.deployment_cost || 0) / 1_000_000_000; // Convert to SOL
+        
+        const current = dailyStats.get(date) || { solUsed: 0, deploymentCount: 0 };
+        dailyStats.set(date, {
+          solUsed: current.solUsed + cost,
+          deploymentCount: current.deploymentCount + 1
+        });
+      });
+      
+      // 3. Convert to array and sort
+      const history = Array.from(dailyStats.entries())
+        .map(([date, stats]) => ({
+          date,
+          solUsed: stats.solUsed,
+          deploymentCount: stats.deploymentCount
+        }))
+        .sort((a, b) => a.date.localeCompare(b.date));
+        
+      // If history is empty, add some dummy data for today if it's a fresh dev env
+      if (history.length === 0) {
+         const today = new Date().toISOString().split('T')[0];
+         history.push({ date: today, solUsed: 0, deploymentCount: 0 });
+      }
+      
+      // 4. Calculate current utilization rate
+      const poolState = await this.getPoolState();
+      const totalPoolSOL = poolState.availableForDeploySOL;
+      
+      // Sum of active deployments (approximate - ideally we check status)
+      // For now, assume deployments in last 30 days are "active" or just take totalDeposited vs liquidBalance
+      // Better: Utilization = (TotalDeposited - LiquidBalance) / TotalDeposited
+      // But liquidBalance is tricky because of rent.
+      // Let's use the poolState values:
+      
+      let utilizationRate = 0;
+      if (poolState.totalDeposited > 0) {
+          // Calculate used amount
+          // Total Deposited - Available Liquid = Used
+          // Note: liquidBalance in poolState is "available for deploy"
+          const usedSOL = (poolState.totalDeposited / 1e9) - (poolState.liquidBalance / 1e9);
+          utilizationRate = Math.max(0, usedSOL) / (poolState.totalDeposited / 1e9);
+      }
+      
+      // Cap at 100%
+      utilizationRate = Math.min(1, utilizationRate);
+      
+      // 5. Calculate APY based on utilization
+      // Base APY: 5%
+      // Max APY: 20% (at 100% utilization)
+      // Formula: APY = 5 + (15 * utilizationRate)
+      const baseApy = 5;
+      const maxBonusApy = 15;
+      const projectedApy = baseApy + (maxBonusApy * utilizationRate);
+      
+      this.logger.log(`   Utilization Rate: ${(utilizationRate * 100).toFixed(2)}%`);
+      this.logger.log(`   Projected APY: ${projectedApy.toFixed(2)}%`);
+      
+      return {
+        history: history.slice(-30), // Last 30 days
+        currentUtilizationRate: utilizationRate,
+        projectedApy
+      };
+      
+    } catch (error) {
+      this.logger.error(`Failed to get utilization history: ${error.message}`);
+      return {
+        history: [],
+        currentUtilizationRate: 0,
+        projectedApy: 5 // Fallback default
+      };
+    }
+  }
+}

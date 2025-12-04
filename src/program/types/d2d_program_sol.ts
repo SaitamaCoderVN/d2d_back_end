@@ -5,7 +5,7 @@
  * IDL can be found at `target/idl/d2d_program_sol.json`.
  */
 export type D2dProgramSol = {
-  "address": "3RpgvJ1YGzcZfCKnUUsAzZcWrsTcMCeEqtNHvr6juGht",
+  "address": "FFFQCLoNLUqhiAbxYMiKXcN5LxAUSMN4fd2ijgtLnwxD",
   "metadata": {
     "name": "d2dProgramSol",
     "version": "0.1.0",

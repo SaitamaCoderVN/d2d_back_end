@@ -138,6 +138,20 @@ export class PoolController {
   }
 
   /**
+   * Get utilization history and projected APY
+   */
+  @Get('utilization')
+  @ApiOperation({ summary: 'Get pool utilization history and projected APY' })
+  @ApiResponse({ status: 200, description: 'Utilization data' })
+  async getUtilization(): Promise<{
+    history: Array<{ date: string; solUsed: number; deploymentCount: number }>;
+    currentUtilizationRate: number;
+    projectedApy: number;
+  }> {
+    return await this.poolService.getUtilizationHistory();
+  }
+
+  /**
    * Admin withdraw excess from Reward Pool
    * Only the authorized admin (A1dVA8adW1XXgcVmLCtbrvbVEVA1n3Q7kNPaTZVonjpq) can withdraw
    * Only excess rewards (surplus) can be withdrawn, not backers' claimable rewards
