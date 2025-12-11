@@ -5,7 +5,7 @@
  * IDL can be found at `target/idl/d2d_program_sol.json`.
  */
 export type D2dProgramSol = {
-  "address": "FFFQCLoNLUqhiAbxYMiKXcN5LxAUSMN4fd2ijgtLnwxD",
+  "address": "BD1dTDXJuAa8dDP34Qq7TzsqBJ5XjnFsTJ9gypfXuNQQ",
   "metadata": {
     "name": "d2dProgramSol",
     "version": "0.1.0",
@@ -1094,6 +1094,16 @@ export type D2dProgramSol = {
         },
         {
           "name": "admin",
+          "docs": [
+            "Admin signer to authorize the fee credit operation"
+          ],
+          "signer": true
+        },
+        {
+          "name": "feePayer",
+          "docs": [
+            "SECURITY FIX: Developer/fee payer who pays the fees (not admin)"
+          ],
           "writable": true,
           "signer": true
         },
@@ -1318,6 +1328,41 @@ export type D2dProgramSol = {
           "type": "bool"
         }
       ]
+    },
+    {
+      "name": "forceRebalance",
+      "docs": [
+        "Emergency force rebalance withdrawal pool (no admin check)",
+        "Temporary workaround when admin keypair is lost"
+      ],
+      "discriminator": [
+        66,
+        0,
+        138,
+        82,
+        54,
+        8,
+        74,
+        108
+      ],
+      "accounts": [
+        {
+          "name": "treasuryPool",
+          "writable": true
+        },
+        {
+          "name": "treasuryPda",
+          "writable": true
+        },
+        {
+          "name": "admin",
+          "docs": [
+            "Admin signer required for security"
+          ],
+          "signer": true
+        }
+      ],
+      "args": []
     },
     {
       "name": "fundTemporaryWallet",
@@ -1565,6 +1610,65 @@ export type D2dProgramSol = {
           "type": "pubkey"
         }
       ]
+    },
+    {
+      "name": "migrateTreasuryPool",
+      "docs": [
+        "Migrate Treasury Pool to new layout (removed withdrawal_pool_balance)",
+        "Admin-only instruction to migrate existing pool to new struct layout",
+        "This preserves all existing data and removes withdrawal_pool_balance field"
+      ],
+      "discriminator": [
+        193,
+        75,
+        4,
+        104,
+        248,
+        187,
+        176,
+        73
+      ],
+      "accounts": [
+        {
+          "name": "treasuryPool",
+          "docs": [
+            "We use UncheckedAccount to avoid deserialization issues with old layout"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  101,
+                  97,
+                  115,
+                  117,
+                  114,
+                  121,
+                  95,
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
     },
     {
       "name": "paySubscription",
@@ -1959,55 +2063,19 @@ export type D2dProgramSol = {
       "accounts": [
         {
           "name": "treasuryPool",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  116,
-                  114,
-                  101,
-                  97,
-                  115,
-                  117,
-                  114,
-                  121,
-                  95,
-                  112,
-                  111,
-                  111,
-                  108
-                ]
-              }
-            ]
-          }
+          "docs": [
+            "We use UncheckedAccount to handle old layout migration",
+            "Note: We can't use Account constraint because old layout can't deserialize",
+            "We verify the PDA manually in the function"
+          ],
+          "writable": true
         },
         {
           "name": "treasuryPda",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  116,
-                  114,
-                  101,
-                  97,
-                  115,
-                  117,
-                  114,
-                  121,
-                  95,
-                  112,
-                  111,
-                  111,
-                  108
-                ]
-              }
-            ]
-          }
+          "docs": [
+            "Same as treasury_pool, just for lamport transfers"
+          ],
+          "writable": true
         },
         {
           "name": "lenderStake",
@@ -2127,54 +2195,14 @@ export type D2dProgramSol = {
       "accounts": [
         {
           "name": "treasuryPool",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  116,
-                  114,
-                  101,
-                  97,
-                  115,
-                  117,
-                  114,
-                  121,
-                  95,
-                  112,
-                  111,
-                  111,
-                  108
-                ]
-              }
-            ]
-          }
+          "docs": [
+            "We can't use seeds constraint because old accounts may have incorrect bump"
+          ],
+          "writable": true
         },
         {
           "name": "treasuryPda",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  116,
-                  114,
-                  101,
-                  97,
-                  115,
-                  117,
-                  114,
-                  121,
-                  95,
-                  112,
-                  111,
-                  111,
-                  108
-                ]
-              }
-            ]
-          }
+          "writable": true
         },
         {
           "name": "admin",
@@ -2202,6 +2230,11 @@ export type D2dProgramSol = {
       "accounts": [
         {
           "name": "treasuryPool",
+          "docs": [
+            "We use UncheckedAccount to handle old layout migration",
+            "Note: We can't use Account constraint because old layout can't deserialize",
+            "We add seeds constraint so Anchor can resolve PDA, but don't deserialize"
+          ],
           "writable": true,
           "pda": {
             "seeds": [
@@ -2228,6 +2261,9 @@ export type D2dProgramSol = {
         },
         {
           "name": "treasuryPda",
+          "docs": [
+            "Same as treasury_pool, just for lamport transfers"
+          ],
           "writable": true,
           "pda": {
             "seeds": [
@@ -2834,18 +2870,28 @@ export type D2dProgramSol = {
     },
     {
       "code": 6027,
+      "name": "invalidAccountData",
+      "msg": "Invalid account data - account needs migration. Please call migrate_treasury_pool() first"
+    },
+    {
+      "code": 6028,
       "name": "divisionByZero",
       "msg": "Division by zero - total deposits is zero"
     },
     {
-      "code": 6028,
+      "code": 6029,
       "name": "invalidWithdrawalRequest",
       "msg": "Invalid withdrawal request"
     },
     {
-      "code": 6029,
+      "code": 6030,
       "name": "invalidAccountOwner",
       "msg": "Invalid account owner - account must be owned by this program"
+    },
+    {
+      "code": 6031,
+      "name": "poolUtilizationTooHigh",
+      "msg": "Pool utilization would exceed 80% - cannot unstake this amount"
     }
   ],
   "types": [
@@ -2925,6 +2971,7 @@ export type D2dProgramSol = {
         "Reward-per-share model:",
         "- deposited_amount: Amount of SOL deposited (net after fees)",
         "- reward_debt: Tracks accumulated rewards at deposit time (deposited_amount * reward_per_share)",
+        "- pending_rewards: Rewards that have been settled but not yet claimed (preserved during unstake/stake)",
         "- claimed_total: Total rewards claimed so far"
       ],
       "type": {
@@ -2941,6 +2988,10 @@ export type D2dProgramSol = {
           {
             "name": "rewardDebt",
             "type": "u128"
+          },
+          {
+            "name": "pendingRewards",
+            "type": "u64"
           },
           {
             "name": "claimedTotal",

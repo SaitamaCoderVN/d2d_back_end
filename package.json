@@ -18,7 +18,10 @@
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
-    "test:e2e": "jest --config ./test/jest-e2e.json"
+    "test:e2e": "jest --config ./test/jest-e2e.json",
+    "unstake:check": "ts-node scripts/check-unstake-issues.ts",
+    "unstake:fix": "ts-node scripts/fix-unstake-now.ts",
+    "unstake:test": "ts-node scripts/test-unstake.ts"
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.32.1",

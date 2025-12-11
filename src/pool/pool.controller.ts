@@ -1,6 +1,7 @@
 import { Controller, Post, Get, Body, Param, UseGuards, HttpCode, HttpStatus } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { PoolService } from './pool.service';
+import { PoolEventsService } from './pool-events.service';
 import { ProgramService } from '../program/program.service';
 import { AdminGuard } from '../common/guards/admin.guard';
 
@@ -17,6 +18,7 @@ export class PoolStateResponseDto {
   platformPoolBalance: number; // Platform pool balance (lamports)
   treasuryPoolPDA: string; // Treasury Pool PDA address
   availableForDeploySOL: number; // Available SOL for deployment (in SOL, not lamports)
+  availableForWithdrawSOL: number; // Available SOL for withdrawal (in SOL, not lamports)
 }
 
 @ApiTags('pool')
@@ -24,6 +26,7 @@ export class PoolStateResponseDto {
 export class PoolController {
   constructor(
     private readonly poolService: PoolService,
+    private readonly poolEventsService: PoolEventsService,
     private readonly programService: ProgramService,
   ) {}
 
@@ -65,6 +68,20 @@ export class PoolController {
   }
 
   /**
+   * Manually sync all backers' points from on-chain
+   * This will fetch all backer deposits and update their points in the database
+   */
+  @Post('sync-backers')
+  @UseGuards(AdminGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Manually sync all backers points from on-chain (admin only)' })
+  @ApiResponse({ status: 200, description: 'Backers synced successfully' })
+  @HttpCode(HttpStatus.OK)
+  async syncBackers(): Promise<{ success: boolean; syncedCount: number }> {
+    return await this.poolEventsService.manualSyncAllBackers();
+  }
+
+  /**
    * Sync liquid_balance with actual account balance
    * Admin-only endpoint to fix liquid_balance when it's out of sync
    */
@@ -98,6 +115,26 @@ export class PoolController {
     rewardPoolAddress: string; // Reward pool PDA address
   }> {
     return await this.poolService.getLeaderboard();
+  }
+
+  /**
+   * Get maximum unstake amount using withdrawal pool
+   * Withdrawal pool is reserved for withdrawals (1/4 of liquid_balance)
+   */
+  @Get('max-unstake/:wallet')
+  @ApiOperation({ summary: 'Calculate maximum unstake amount using withdrawal pool' })
+  @ApiResponse({ status: 200, description: 'Maximum unstake calculation' })
+  async getMaxUnstake(@Param('wallet') wallet: string): Promise<{
+    userStake: number; // lamports - total user staked
+    maxUnstake: number; // lamports - max they can unstake
+    poolLiquidBalance: number; // lamports - total pool liquid balance (for deploy)
+    poolWithdrawalBalance: number; // lamports - withdrawal pool balance (for unstake)
+    poolTotalDeposited: number; // lamports - total deposited in pool
+    poolUtilization: number; // percentage - current pool utilization (0-100)
+    canUnstake: boolean; // whether user can unstake any amount
+    reason?: string; // reason if cannot unstake
+  }> {
+    return await this.poolService.calculateMaxUnstake(wallet);
   }
 
   /**

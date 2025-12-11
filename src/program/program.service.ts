@@ -1603,19 +1603,23 @@ export class ProgramService implements OnModuleInit {
       this.logger.log(`   Attempting to call sync_liquid_balance instruction...`);
       this.logger.log(`   ⚠️  If this hangs, the instruction may not be deployed yet.`);
 
-      // Add timeout for RPC call (20 seconds)
+      // Add timeout for RPC call (30 seconds - increased for better reliability)
+      // Note: sync_liquid_balance requires both treasury_pool and treasury_pda
+      // Both are the same PDA address, but Anchor needs them as separate accounts
       const rpcPromise = this.program.methods
         .syncLiquidBalance()
         .accountsPartial({
           admin: this.adminKeypair.publicKey,
-        })
+          treasuryPool: treasuryPoolPDA,  // TreasuryPool account (with data)
+          treasuryPda: treasuryPoolPDA,    // Treasury PDA (for actual balance) - same address
+        } as any)
         .signers([this.adminKeypair])
         .rpc();
 
       const timeoutPromise = new Promise<never>((_, reject) => {
         setTimeout(() => {
-          reject(new Error('syncLiquidBalance RPC call timed out after 20 seconds. The instruction may not be deployed in the smart contract.'));
-        }, 20000);
+          reject(new Error('syncLiquidBalance RPC call timed out after 30 seconds. The instruction may not be deployed in the smart contract.'));
+        }, 30000);
       });
 
       const tx = await Promise.race([rpcPromise, timeoutPromise]);

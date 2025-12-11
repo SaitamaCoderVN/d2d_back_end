@@ -113,21 +113,31 @@ export class DeploymentService {
 
     try {
       const publicKey = new PublicKey(dto.programId);
-      const accountInfo = await this.devnetConnection.getAccountInfo(publicKey);
+      
+      // Add timeout for RPC call (30 seconds)
+      const timeoutMs = 30000;
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('Verification timeout: RPC call took too long')), timeoutMs);
+      });
+
+      const accountInfoPromise = this.devnetConnection.getAccountInfo(publicKey);
+      const accountInfo = await Promise.race([accountInfoPromise, timeoutPromise]);
 
       if (!accountInfo) {
+        this.logger.warn(`Program not found on devnet: ${dto.programId}`);
         return {
           isValid: false,
           programId: dto.programId,
-          error: 'Program not found on devnet',
+          error: 'Program not found on devnet. Please ensure the program is deployed on devnet.',
         };
       }
 
       if (!accountInfo.executable) {
+        this.logger.warn(`Account is not executable: ${dto.programId}`);
         return {
           isValid: false,
           programId: dto.programId,
-          error: 'Account is not an executable program',
+          error: 'Account is not an executable program. Please verify the program ID is correct.',
         };
       }
 
@@ -139,12 +149,24 @@ export class DeploymentService {
         programId: dto.programId,
         programSize: accountInfo.data.length,
       };
-    } catch (error) {
-      this.logger.error(`Program verification failed: ${error.message}`);
+    } catch (error: any) {
+      const errorMessage = error?.message || 'Unknown error';
+      this.logger.error(`Program verification failed: ${errorMessage}`);
+      
+      // Provide more specific error messages
+      let userFriendlyError = `Verification failed: ${errorMessage}`;
+      if (errorMessage.includes('timeout')) {
+        userFriendlyError = 'Verification timeout: Unable to connect to devnet RPC. Please try again or check your network connection.';
+      } else if (errorMessage.includes('Invalid public key')) {
+        userFriendlyError = 'Invalid program ID format. Please check the program ID and try again.';
+      } else if (errorMessage.includes('fetch')) {
+        userFriendlyError = 'Network error: Unable to reach devnet RPC. Please check your connection and try again.';
+      }
+      
       return {
         isValid: false,
         programId: dto.programId,
-        error: `Invalid program ID or verification failed: ${error.message}`,
+        error: userFriendlyError,
       };
     }
   }
@@ -575,6 +597,34 @@ export class DeploymentService {
       const treasuryBefore = await this.programService.getTreasuryPoolState();
       if (treasuryBefore) {
         this.logger.log(`   📊 Treasury Pool total_staked BEFORE: ${treasuryBefore.totalStaked} lamports (${treasuryBefore.totalStaked / 1e9} SOL)`);
+        this.logger.log(`   📊 Treasury Pool liquid_balance: ${treasuryBefore.liquidBalance} lamports (${treasuryBefore.liquidBalance / 1e9} SOL)`);
+        
+        // Check if liquid_balance might be out of sync
+        const accountBalance = treasuryBefore.totalStaked;
+        const liquidBalance = treasuryBefore.liquidBalance;
+        const difference = accountBalance - liquidBalance;
+        
+        if (difference > 1000000) { // More than 0.001 SOL difference
+          this.logger.warn(`   ⚠️  Potential liquid_balance sync issue detected:`);
+          this.logger.warn(`      Account balance: ${accountBalance / 1e9} SOL`);
+          this.logger.warn(`      Liquid balance: ${liquidBalance / 1e9} SOL`);
+          this.logger.warn(`      Difference: ${difference / 1e9} SOL`);
+          this.logger.warn(`   🔄 Attempting to sync liquid_balance before funding...`);
+          
+          try {
+            await this.programService.syncLiquidBalance();
+            this.logger.log(`   ✅ liquid_balance synced successfully`);
+            
+            // Re-check treasury state after sync
+            const treasuryAfterSync = await this.programService.getTreasuryPoolState();
+            if (treasuryAfterSync) {
+              this.logger.log(`   📊 Treasury Pool liquid_balance AFTER sync: ${treasuryAfterSync.liquidBalance} lamports (${treasuryAfterSync.liquidBalance / 1e9} SOL)`);
+            }
+          } catch (syncError: any) {
+            this.logger.warn(`   ⚠️  Failed to sync liquid_balance: ${syncError.message}`);
+            this.logger.warn(`   💡 Will attempt automatic sync if funding fails`);
+          }
+        }
       }
       
       this.logger.log(`   💸 Transferring ${deployment.deployment_cost} lamports (${deployment.deployment_cost / 1e9} SOL) from Treasury Pool to temporary wallet...`);
@@ -589,8 +639,20 @@ export class DeploymentService {
         this.logger.log(`   ✅ Funding completed successfully`);
       } catch (fundError: any) {
         this.logger.error(`   ❌ Funding failed: ${fundError.message}`);
-        this.logger.error(`   ⚠️  If you see "InsufficientLiquidBalance", the system will attempt to sync automatically.`);
-        this.logger.error(`   ⚠️  If sync fails, you may need to deploy the updated smart contract first.`);
+        
+        // Check if it's InsufficientLiquidBalance error
+        const isInsufficientLiquidBalance = 
+          fundError.message?.includes('InsufficientLiquidBalance') ||
+          fundError.message?.includes('Insufficient liquid balance') ||
+          fundError.message?.includes('liquid_balance is out of sync');
+        
+        if (isInsufficientLiquidBalance) {
+          this.logger.error(`   ⚠️  InsufficientLiquidBalance detected - the system should have attempted auto-sync.`);
+          this.logger.error(`   💡 If auto-sync failed, please manually sync using:`);
+          this.logger.error(`      POST /api/pool/sync-liquid-balance`);
+          this.logger.error(`   💡 Or deploy the updated smart contract with sync_liquid_balance instruction.`);
+        }
+        
         throw fundError;
       }
 
@@ -1419,6 +1481,25 @@ export class DeploymentService {
 
   async getAllDeployments(): Promise<Deployment[]> {
     return this.supabaseService.getAllDeployments();
+  }
+
+  /**
+   * Get deployment logs by deployment ID
+   */
+  async getDeploymentLogs(deploymentId: string) {
+    return this.supabaseService.getDeploymentLogs(deploymentId);
+  }
+
+  /**
+   * Get deployment with logs (optimized for single request)
+   */
+  async getDeploymentWithLogs(id: string) {
+    const deployment = await this.getDeploymentById(id);
+    const logs = await this.getDeploymentLogs(id);
+    return {
+      ...deployment,
+      logs,
+    };
   }
 }
 

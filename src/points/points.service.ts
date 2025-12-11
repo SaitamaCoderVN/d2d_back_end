@@ -1,6 +1,5 @@
 import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
-import { PoolService } from '../pool/pool.service';
 import { LAMPORTS_PER_SOL } from '@solana/web3.js';
 
 // Point calculation constants
@@ -31,28 +30,30 @@ export class PointsService implements OnModuleInit, OnModuleDestroy {
 
   constructor(
     private readonly supabaseService: SupabaseService,
-    private readonly poolService: PoolService,
   ) {}
 
   /**
-   * Start periodic sync of points (every hour)
+   * Start periodic sync of points
+   * Runs every 5 minutes to continuously calculate points in background
+   * This ensures points are always up-to-date, even without frontend calls
    */
   onModuleInit() {
-    // Sync points every hour (3600000 ms)
+    // Sync points every 5 minutes (300000 ms) for accurate tracking
     this.syncInterval = setInterval(() => {
       this.syncAllBackerPoints().catch((error) => {
         this.logger.error(`Failed to sync points: ${error.message}`);
       });
-    }, 3600000); // 1 hour
+    }, 300000); // 5 minutes
 
-    this.logger.log('Points service initialized - periodic sync enabled (every 1 hour)');
-    
-    // Initial sync after 30 seconds (to let app fully start)
+    this.logger.log('✅ Points service initialized - auto-sync every 5 minutes');
+
+    // Initial sync after 10 seconds (to let app fully start)
     setTimeout(() => {
+      this.logger.log('🔄 Running initial points sync...');
       this.syncAllBackerPoints().catch((error) => {
         this.logger.error(`Failed to initial sync points: ${error.message}`);
       });
-    }, 30000);
+    }, 10000);
   }
 
   /**

@@ -1,11 +1,11 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { PointsService } from './points.service';
 import { PointsController } from './points.controller';
 import { SupabaseModule } from '../supabase/supabase.module';
-import { PoolModule } from '../pool/pool.module';
+import { ProgramModule } from '../program/program.module';
 
 @Module({
-  imports: [SupabaseModule, PoolModule],
+  imports: [SupabaseModule, forwardRef(() => ProgramModule)],
   controllers: [PointsController],
   providers: [PointsService],
   exports: [PointsService],

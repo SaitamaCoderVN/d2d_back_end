@@ -49,6 +49,7 @@ export class PoolService {
     platformPoolBalance: number;
     treasuryPoolPDA: string;
     availableForDeploySOL: number;
+    availableForWithdrawSOL: number; // Withdrawal pool balance in SOL
   }> {
     try {
       // Derive treasury pool PDA from seeds (no hardcoding)
@@ -124,11 +125,12 @@ export class PoolService {
       return {
         rewardPerShare: treasuryPool?.rewardPerShare?.toString() || '0',
         totalDeposited: treasuryPool?.totalDeposited?.toNumber() || 0,
-        liquidBalance: availableBalanceLamports, // Use calculated available balance
+        liquidBalance: availableBalanceLamports, // Use calculated available balance (shared between deployments and withdrawals)
         rewardPoolBalance: treasuryPool?.rewardPoolBalance?.toNumber() || 0,
         platformPoolBalance: treasuryPool?.platformPoolBalance?.toNumber() || 0,
         treasuryPoolPDA: TREASURY_POOL_ADDRESS,
         availableForDeploySOL,
+        availableForWithdrawSOL: availableForDeploySOL, // Same as liquid_balance (shared pool)
       };
     } catch (error) {
       this.logger.error(`Failed to get pool state: ${error.message}`);
@@ -183,26 +185,30 @@ export class PoolService {
 
   /**
    * Calculate claimable rewards for a backer
-   * Formula: (deposited_amount * reward_per_share - reward_debt) / PRECISION
+   * Formula: pending_rewards + (deposited_amount * reward_per_share - reward_debt) / PRECISION
    */
   async calculateClaimableRewards(backerWallet: string): Promise<number> {
     try {
       const poolState = await this.getPoolState();
       const [backerDepositPDA] = this.programService.getBackerDepositPDA(new PublicKey(backerWallet));
-      
+
       const backerDeposit = await this.programService.getProgram()
         .account.backerDeposit.fetch(backerDepositPDA);
 
       const PRECISION = BigInt('1000000000000'); // 1e12
       const depositedAmount = BigInt(backerDeposit.depositedAmount.toNumber());
+      const pendingRewards = backerDeposit.pendingRewards?.toNumber() || 0;
       const rewardPerShare = BigInt(poolState.rewardPerShare);
       const rewardDebt = backerDeposit.rewardDebt.toBigInt();
 
       // Calculate: (deposited_amount * reward_per_share - reward_debt) / PRECISION
       const accumulated = depositedAmount * rewardPerShare;
-      const claimable = (accumulated - rewardDebt) / PRECISION;
+      const rewardsFromRewardPerShare = (accumulated - rewardDebt) / PRECISION;
 
-      return Number(claimable);
+      // Total claimable = pending_rewards + rewards from reward_per_share
+      const totalClaimable = pendingRewards + Number(rewardsFromRewardPerShare);
+
+      return totalClaimable;
     } catch (error) {
       this.logger.error(`Failed to calculate claimable rewards: ${error.message}`);
       return 0;
@@ -370,32 +376,37 @@ export class PoolService {
             : account.publicKey;
           
           const isActive = acc.isActive !== undefined ? acc.isActive : acc.is_active;
-          const depositedAmount = (acc.depositedAmount as any)?.toNumber 
-            ? (acc.depositedAmount as any).toNumber() 
+          const depositedAmount = (acc.depositedAmount as any)?.toNumber
+            ? (acc.depositedAmount as any).toNumber()
             : (acc.deposited_amount !== undefined ? Number(acc.deposited_amount) : Number(acc.depositedAmount || 0));
-          
+          const pendingRewards = (acc.pendingRewards as any)?.toNumber
+            ? (acc.pendingRewards as any).toNumber()
+            : (acc.pending_rewards !== undefined ? Number(acc.pending_rewards) : Number(acc.pendingRewards || 0));
+
           // Log each account for debugging
           const backerStr = backerPubkey instanceof PublicKey ? backerPubkey.toString() : String(backerPubkey);
-          this.logger.log(`   Account ${backerStr.slice(0, 8)}...: isActive=${isActive}, deposited=${depositedAmount / 1e9} SOL`);
-          
+          this.logger.log(`   Account ${backerStr.slice(0, 8)}...: isActive=${isActive}, deposited=${depositedAmount / 1e9} SOL, pending=${pendingRewards / 1e9} SOL`);
+
           // Calculate all values first
-          const rewardDebt = (acc.rewardDebt as any)?.toBigInt 
-            ? (acc.rewardDebt as any).toBigInt() 
+          const rewardDebt = (acc.rewardDebt as any)?.toBigInt
+            ? (acc.rewardDebt as any).toBigInt()
             : (acc.reward_debt !== undefined ? BigInt(acc.reward_debt.toString()) : BigInt(acc.rewardDebt?.toString() || '0'));
-          const claimedTotal = (acc.claimedTotal as any)?.toNumber 
-            ? (acc.claimedTotal as any).toNumber() 
+          const claimedTotal = (acc.claimedTotal as any)?.toNumber
+            ? (acc.claimedTotal as any).toNumber()
             : (acc.claimed_total !== undefined ? Number(acc.claimed_total) : Number(acc.claimedTotal || 0));
-          
+
           // Calculate claimable rewards
-          // Formula: (deposited_amount * reward_per_share - reward_debt) / PRECISION
+          // Formula: pending_rewards + (deposited_amount * reward_per_share - reward_debt) / PRECISION
           const depositedAmountBigInt = BigInt(depositedAmount);
           const accumulated = depositedAmountBigInt * rewardPerShare;
-          
+
           // Ensure we don't get negative values (shouldn't happen, but safe)
-          const claimableBigInt = accumulated >= rewardDebt 
-            ? (accumulated - rewardDebt) / PRECISION 
+          const rewardsFromRewardPerShare = accumulated >= rewardDebt
+            ? (accumulated - rewardDebt) / PRECISION
             : BigInt(0);
-          const claimableRewards = Number(claimableBigInt);
+
+          // Total claimable = pending_rewards + rewards from reward_per_share
+          const claimableRewards = pendingRewards + Number(rewardsFromRewardPerShare);
           
           // Log detailed info for each account
           this.logger.log(`     - Deposited: ${depositedAmount / 1e9} SOL, Claimable: ${claimableRewards / 1e9} SOL, Claimed: ${claimedTotal / 1e9} SOL`);
@@ -541,6 +552,128 @@ export class PoolService {
   /**
    * Get user's stake and reward information
    */
+  /**
+   * Calculate maximum unstake amount using liquid_balance
+   *
+   * With simplified pool system:
+   * - liquid_balance is shared between deployments and withdrawals
+   * - Max unstake = min(userStake, liquidBalance)
+   */
+  async calculateMaxUnstake(walletAddress: string): Promise<{
+    userStake: number;
+    maxUnstake: number;
+    poolLiquidBalance: number;
+    poolWithdrawalBalance: number; // Same as liquid_balance (for backward compatibility)
+    poolTotalDeposited: number;
+    poolUtilization: number;
+    canUnstake: boolean;
+    reason?: string;
+  }> {
+    try {
+      this.logger.log(`💰 Calculating max unstake for wallet: ${walletAddress}`);
+
+      // Get pool state
+      const poolState = await this.getPoolState();
+      const liquidBalance = poolState.liquidBalance; // lamports (shared between deployments and withdrawals)
+      const totalDeposited = poolState.totalDeposited; // lamports
+
+      // Get user stake
+      this.logger.log(`   🔍 Fetching user stake info for wallet: ${walletAddress}`);
+      const userInfo = await this.getUserStakeInfo(walletAddress);
+      const userStake = userInfo.depositedAmount; // lamports
+      this.logger.log(`   📊 User stake info result:`);
+      this.logger.log(`     depositedAmount: ${userStake} lamports (${userStake / 1e9} SOL)`);
+      this.logger.log(`     isActive: ${userInfo.isActive}`);
+
+      // Calculate current utilization (for display purposes)
+      const currentUtilization = totalDeposited > 0
+        ? ((totalDeposited - liquidBalance) / totalDeposited) * 100
+        : 0;
+
+      this.logger.log(`   Pool State:`);
+      this.logger.log(`     Total Deposited: ${totalDeposited / 1e9} SOL`);
+      this.logger.log(`     Liquid Balance (shared for deploy & withdraw): ${liquidBalance / 1e9} SOL`);
+      this.logger.log(`     Current Utilization: ${currentUtilization.toFixed(2)}%`);
+      this.logger.log(`   User Stake: ${userStake / 1e9} SOL`);
+
+      // Check if user has any stake
+      // Allow unstake if deposited_amount > 0, even if isActive = false
+      // This handles cases where isActive was incorrectly set to false
+      // If user has deposited_amount > 0, they should be able to withdraw
+      if (userStake === 0) {
+        return {
+          userStake: 0,
+          maxUnstake: 0,
+          poolLiquidBalance: liquidBalance,
+          poolWithdrawalBalance: liquidBalance, // Same as liquid_balance for backward compatibility
+          poolTotalDeposited: totalDeposited,
+          poolUtilization: currentUtilization,
+          canUnstake: false,
+          reason: 'No stake found. Please stake SOL first.',
+        };
+      }
+
+      // Check if liquid_balance has any balance
+      if (liquidBalance === 0) {
+        return {
+          userStake,
+          maxUnstake: 0,
+          poolLiquidBalance: liquidBalance,
+          poolWithdrawalBalance: liquidBalance, // Same as liquid_balance for backward compatibility
+          poolTotalDeposited: totalDeposited,
+          poolUtilization: currentUtilization,
+          canUnstake: false,
+          reason: 'Liquid balance is empty. All SOL may have been used for deployments.',
+        };
+      }
+
+      // Max unstake is the minimum of:
+      // 1. User's stake (can't unstake more than they have)
+      // 2. Liquid balance (shared between deployments and withdrawals)
+      let maxUnstake = Math.min(
+        userStake,
+        liquidBalance
+      );
+
+      // Ensure non-negative
+      maxUnstake = Math.max(0, Math.floor(maxUnstake));
+
+      const canUnstake = maxUnstake > 0;
+      let reason: string | undefined;
+
+      if (!canUnstake) {
+        if (liquidBalance === 0) {
+          reason = `Liquid balance is empty. Available for withdrawal: ${(liquidBalance / 1e9).toFixed(4)} SOL`;
+        } else if (userStake === 0) {
+          reason = 'No stake found. Please stake SOL first.';
+        } else {
+          reason = 'Cannot unstake at this time';
+        }
+      }
+
+      this.logger.log(`   Max Unstake Calculation (using liquid_balance):`);
+      this.logger.log(`     User Stake: ${userStake / 1e9} SOL`);
+      this.logger.log(`     Liquid Balance: ${liquidBalance / 1e9} SOL`);
+      this.logger.log(`     Final Max Unstake: ${maxUnstake / 1e9} SOL`);
+      this.logger.log(`     Can Unstake: ${canUnstake}`);
+      if (reason) this.logger.log(`     Reason: ${reason}`);
+
+      return {
+        userStake,
+        maxUnstake,
+        poolLiquidBalance: liquidBalance,
+        poolWithdrawalBalance: liquidBalance, // Same as liquid_balance for backward compatibility
+        poolTotalDeposited: totalDeposited,
+        poolUtilization: currentUtilization,
+        canUnstake,
+        reason,
+      };
+    } catch (error) {
+      this.logger.error(`Failed to calculate max unstake: ${error.message}`);
+      throw error;
+    }
+  }
+
   async getUserStakeInfo(walletAddress: string): Promise<{
     wallet: string;
     depositedAmount: number; // lamports
@@ -551,7 +684,7 @@ export class PoolService {
   }> {
     try {
       this.logger.log(`📊 Fetching stake info for wallet: ${walletAddress}`);
-      
+
       const program = this.programService.getProgram();
       const poolState = await this.getPoolState();
       const PRECISION = BigInt('1000000000000'); // 1e12
@@ -559,25 +692,99 @@ export class PoolService {
 
       // Get BackerDeposit PDA
       const [backerDepositPDA] = this.programService.getBackerDepositPDA(new PublicKey(walletAddress));
-      
+
+      this.logger.log(`   BackerDeposit PDA: ${backerDepositPDA.toString()}`);
+
       try {
-        const backerDeposit = await program.account.backerDeposit.fetch(backerDepositPDA);
+        // Try to fetch as backerDeposit first, fallback to lenderStake (legacy)
+        let backerDeposit: any = null;
+        try {
+          backerDeposit = await program.account.backerDeposit.fetch(
+          backerDepositPDA,
+          'confirmed' // Force confirmed commitment to get latest state
+        );
+          this.logger.log(`   ✅ Fetched as backerDeposit`);
+        } catch (backerDepositError: any) {
+          this.logger.log(`   ⚠️  Failed to fetch as backerDeposit: ${backerDepositError.message}`);
+          // Try legacy lenderStake account name
+          try {
+            backerDeposit = await (program.account as any).lenderStake.fetch(
+              backerDepositPDA,
+              'confirmed'
+            );
+            this.logger.log(`   ✅ Fetched as lenderStake (legacy)`);
+          } catch (lenderStakeError: any) {
+            this.logger.log(`   ❌ Failed to fetch as lenderStake: ${lenderStakeError.message}`);
+            throw backerDepositError; // Throw original error
+          }
+        }
+
+        // Extract data with proper error handling
+        const isActive = backerDeposit.isActive !== undefined ? backerDeposit.isActive : (backerDeposit as any).is_active || false;
+        const depositedAmount = backerDeposit.depositedAmount
+          ? (typeof backerDeposit.depositedAmount === 'number'
+              ? backerDeposit.depositedAmount
+              : backerDeposit.depositedAmount.toNumber())
+          : ((backerDeposit as any).deposited_amount
+              ? (typeof (backerDeposit as any).deposited_amount === 'number'
+                  ? (backerDeposit as any).deposited_amount
+                  : (backerDeposit as any).deposited_amount.toNumber())
+              : 0);
+        const pendingRewards = backerDeposit.pendingRewards
+          ? (typeof backerDeposit.pendingRewards === 'number'
+              ? backerDeposit.pendingRewards
+              : backerDeposit.pendingRewards.toNumber())
+          : ((backerDeposit as any).pending_rewards
+              ? (typeof (backerDeposit as any).pending_rewards === 'number'
+                  ? (backerDeposit as any).pending_rewards
+                  : (backerDeposit as any).pending_rewards.toNumber())
+              : 0);
+        const rewardDebt = backerDeposit.rewardDebt
+          ? (typeof backerDeposit.rewardDebt === 'bigint'
+              ? backerDeposit.rewardDebt
+              : backerDeposit.rewardDebt.toBigInt())
+          : ((backerDeposit as any).reward_debt
+              ? (typeof (backerDeposit as any).reward_debt === 'bigint'
+                  ? (backerDeposit as any).reward_debt
+                  : BigInt((backerDeposit as any).reward_debt.toString()))
+              : BigInt(0));
+        const claimedTotal = backerDeposit.claimedTotal
+          ? (typeof backerDeposit.claimedTotal === 'number'
+              ? backerDeposit.claimedTotal
+              : backerDeposit.claimedTotal.toNumber())
+          : ((backerDeposit as any).claimed_total
+              ? (typeof (backerDeposit as any).claimed_total === 'number'
+                  ? (backerDeposit as any).claimed_total
+                  : (backerDeposit as any).claimed_total.toNumber())
+              : 0);
         
-        const isActive = backerDeposit.isActive;
-        const depositedAmount = backerDeposit.depositedAmount.toNumber();
-        const rewardDebt = backerDeposit.rewardDebt.toBigInt();
-        const claimedTotal = backerDeposit.claimedTotal.toNumber();
+        this.logger.log(`   📊 Extracted data:`);
+        this.logger.log(`     isActive: ${isActive}`);
+        this.logger.log(`     depositedAmount: ${depositedAmount} lamports (${depositedAmount / 1e9} SOL)`);
+        this.logger.log(`     pendingRewards: ${pendingRewards} lamports (${pendingRewards / 1e9} SOL)`);
+        this.logger.log(`     rewardDebt: ${rewardDebt.toString()}`);
+        this.logger.log(`     claimedTotal: ${claimedTotal} lamports (${claimedTotal / 1e9} SOL)`);
+
+        // Validate extracted data
+        if (depositedAmount === 0 && isActive) {
+          this.logger.warn(`   ⚠️  WARNING: depositedAmount is 0 but isActive is true - this might be an issue`);
+        }
+        if (depositedAmount > 0 && !isActive) {
+          this.logger.warn(`   ⚠️  WARNING: depositedAmount > 0 (${depositedAmount / 1e9} SOL) but isActive is false - account will be reactivated on unstake`);
+        }
 
         // Calculate claimable rewards
-        // Formula: (deposited_amount * reward_per_share - reward_debt) / PRECISION
+        // Formula: pending_rewards + (deposited_amount * reward_per_share - reward_debt) / PRECISION
         const depositedAmountBigInt = BigInt(depositedAmount);
         const accumulated = depositedAmountBigInt * rewardPerShare;
-        
+
         // Ensure we don't get negative values
-        const claimableBigInt = accumulated >= rewardDebt 
-          ? (accumulated - rewardDebt) / PRECISION 
+        const rewardsFromRewardPerShare = accumulated >= rewardDebt
+          ? (accumulated - rewardDebt) / PRECISION
           : BigInt(0);
-        const claimableRewards = Number(claimableBigInt);
+
+        // Total claimable = pending_rewards + rewards from reward_per_share
+        const claimableRewards = pendingRewards + Number(rewardsFromRewardPerShare);
         const totalRewards = claimableRewards + claimedTotal;
 
         this.logger.log(`   ✅ User stake info:`);
@@ -599,15 +806,90 @@ export class PoolService {
         const errorMessage = error?.message || String(error);
         const errorCode = error?.code || error?.errorCode || '';
         
+        // Log full error for debugging
+        this.logger.warn(`   ⚠️  Error fetching stake account:`);
+        this.logger.warn(`     Message: ${errorMessage}`);
+        this.logger.warn(`     Code: ${errorCode}`);
+        this.logger.warn(`     PDA: ${backerDepositPDA.toString()}`);
+
+        // Check if account exists on-chain (even if deserialization fails)
+        try {
+          const program = this.programService.getProgram();
+          const accountInfo = await program.provider.connection.getAccountInfo(backerDepositPDA, 'confirmed');
+          if (accountInfo) {
+            this.logger.warn(`     ⚠️  Account EXISTS on-chain but deserialization failed!`);
+            this.logger.warn(`     Account size: ${accountInfo.data.length} bytes`);
+            this.logger.warn(`     Account owner: ${accountInfo.owner.toString()}`);
+            this.logger.warn(`     This might be an old account format that needs migration.`);
+            
+            // Try to parse raw account data manually
+            try {
+              // BackerDeposit layout: 8 (discriminator) + 32 (backer) + 8 (depositedAmount) + 16 (rewardDebt) + 8 (claimedTotal) + 1 (isActive) + 1 (bump)
+              const data = accountInfo.data;
+              if (data.length >= 74) {
+                // Skip discriminator (8 bytes)
+                let offset = 8;
+                
+                // Read backer (32 bytes) - skip
+                offset += 32;
+                
+                // Read depositedAmount (8 bytes, u64, little-endian)
+                const depositedAmountBuffer = data.slice(offset, offset + 8);
+                const depositedAmount = Number(depositedAmountBuffer.readBigUInt64LE(0));
+                offset += 8;
+                
+                // Read rewardDebt (16 bytes, u128, little-endian) - skip for now
+                offset += 16;
+                
+                // Read claimedTotal (8 bytes, u64, little-endian)
+                const claimedTotalBuffer = data.slice(offset, offset + 8);
+                const claimedTotal = Number(claimedTotalBuffer.readBigUInt64LE(0));
+                offset += 8;
+                
+                // Read isActive (1 byte, bool)
+                const isActive = data[offset] === 1;
+                
+                this.logger.log(`     ✅ Successfully parsed raw account data:`);
+                this.logger.log(`       depositedAmount: ${depositedAmount} lamports (${depositedAmount / 1e9} SOL)`);
+                this.logger.log(`       claimedTotal: ${claimedTotal} lamports (${claimedTotal / 1e9} SOL)`);
+                this.logger.log(`       isActive: ${isActive}`);
+                
+                // Return parsed data instead of 0
+                if (depositedAmount > 0) {
+                  this.logger.log(`     ✅ Returning parsed data (account has ${depositedAmount / 1e9} SOL staked)`);
+                  return {
+                    wallet: walletAddress,
+                    depositedAmount,
+                    claimableRewards: 0, // Can't calculate without rewardDebt
+                    claimedTotal,
+                    isActive,
+                    totalRewards: claimedTotal,
+                  };
+                }
+              }
+            } catch (parseError: any) {
+              this.logger.warn(`     Could not parse raw account data: ${parseError.message}`);
+            }
+            
+            // Account exists but can't deserialize - might be old format
+            // Return 0 but log warning
+          } else {
+            this.logger.log(`     ℹ️  Account does not exist on-chain`);
+          }
+        } catch (accountCheckError: any) {
+          this.logger.warn(`     Could not check account existence: ${accountCheckError.message}`);
+        }
+
         if (
           errorMessage.includes('Account does not exist') ||
           errorMessage.includes('not found') ||
           errorMessage.includes('InvalidAccountData') ||
           errorCode === 'InvalidAccountData' ||
           errorCode === 3001 || // AccountDiscriminatorMismatch
-          errorCode === 3002 // AccountDiscriminatorMismatch
+          errorCode === 3002 || // AccountDiscriminatorMismatch
+          errorCode === 3003 // AccountDidNotDeserialize
         ) {
-          this.logger.log(`   ℹ️  User hasn't staked yet (account doesn't exist)`);
+          this.logger.log(`   ℹ️  User hasn't staked yet or account needs migration`);
           return {
             wallet: walletAddress,
             depositedAmount: 0,
@@ -619,9 +901,7 @@ export class PoolService {
         }
         
         // Log unexpected errors but don't throw - return empty data instead
-        this.logger.warn(`   ⚠️  Unexpected error fetching stake account: ${errorMessage}`);
-        this.logger.warn(`   Error code: ${errorCode}`);
-        this.logger.warn(`   Returning empty stake info`);
+        this.logger.warn(`   ⚠️  Unexpected error - returning empty stake info`);
         return {
           wallet: walletAddress,
           depositedAmount: 0,

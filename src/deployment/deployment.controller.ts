@@ -92,4 +92,27 @@ export class DeploymentController {
     }
     return this.deploymentService.getAllDeployments();
   }
+
+  /**
+   * Get deployment logs by deployment ID
+   */
+  @Get(':id/logs')
+  @ApiOperation({ summary: 'Get deployment logs by deployment ID' })
+  @ApiResponse({ status: 200, description: 'List of deployment logs' })
+  @ApiResponse({ status: 404, description: 'Deployment not found' })
+  async getDeploymentLogs(@Param('id') id: string) {
+    const logs = await this.deploymentService.getDeploymentLogs(id);
+    return logs;
+  }
+
+  /**
+   * Get deployment with logs (optimized endpoint - combines deployment + logs)
+   */
+  @Get(':id/with-logs')
+  @ApiOperation({ summary: 'Get deployment details with logs (optimized)' })
+  @ApiResponse({ status: 200, description: 'Deployment with logs' })
+  @ApiResponse({ status: 404, description: 'Deployment not found' })
+  async getDeploymentWithLogs(@Param('id') id: string) {
+    return this.deploymentService.getDeploymentWithLogs(id);
+  }
 }
